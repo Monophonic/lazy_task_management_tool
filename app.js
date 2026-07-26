@@ -82,11 +82,17 @@
   const syncUseLocalBtn = document.getElementById("syncUseLocalBtn");
   const syncUseCloudBtn = document.getElementById("syncUseCloudBtn");
 
+  const calendarPromptModal = document.getElementById("calendarPromptModal");
+  const calendarPromptTextEl = document.getElementById("calendarPromptText");
+  const calendarPromptSkipBtn = document.getElementById("calendarPromptSkipBtn");
+  const calendarPromptDownloadBtn = document.getElementById("calendarPromptDownloadBtn");
+
   let tasks = loadTasks();
   let completedLog = loadCompletedLog();
   let pendingDeleteId = null;
   let statusFilter = "all";
   let pendingImportData = null;
+  let pendingCalendarTask = null;
 
   let syncConfigured = false;
   let cloudUser = null;
@@ -813,6 +819,109 @@
     openSyncConflictModal(remote);
   }
 
+  function pad2(n) {
+    return String(n).padStart(2, "0");
+  }
+
+  function toIcsUtc(ms) {
+    const d = new Date(ms);
+    return (
+      d.getUTCFullYear() +
+      pad2(d.getUTCMonth() + 1) +
+      pad2(d.getUTCDate()) +
+      "T" +
+      pad2(d.getUTCHours()) +
+      pad2(d.getUTCMinutes()) +
+      pad2(d.getUTCSeconds()) +
+      "Z"
+    );
+  }
+
+  function icsEscape(text) {
+    return String(text)
+      .replace(/\\/g, "\\\\")
+      .replace(/;/g, "\\;")
+      .replace(/,/g, "\\,")
+      .replace(/\n/g, "\\n");
+  }
+
+  function foldIcsLine(line) {
+    const CHUNK = 74; // RFC 5545: content lines should not exceed 75 octets
+    if (line.length <= 75) return line;
+    let result = line.slice(0, CHUNK);
+    let rest = line.slice(CHUNK);
+    while (rest.length > 0) {
+      result += "\r\n " + rest.slice(0, CHUNK - 1);
+      rest = rest.slice(CHUNK - 1);
+    }
+    return result;
+  }
+
+  function buildIcsForTask(task) {
+    const now = Date.now();
+    const dueAt = nextDueAt(task);
+    const eventDurationMs = 30 * 60 * 1000;
+
+    const lines = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//Lazy Task Management Tool//EN",
+      "CALSCALE:GREGORIAN",
+      "BEGIN:VEVENT",
+      `UID:${task.id}@lazy-task-management-tool`,
+      `DTSTAMP:${toIcsUtc(now)}`,
+      `DTSTART:${toIcsUtc(dueAt)}`,
+      `DTEND:${toIcsUtc(dueAt + eventDurationMs)}`,
+      `SUMMARY:${icsEscape(task.label)}`,
+    ];
+
+    if (task.description) {
+      lines.push(`DESCRIPTION:${icsEscape(task.description)}`);
+    }
+
+    if (!task.isOneTime) {
+      // Mirrors the app's own fixed-interval cadence math rather than a
+      // calendar-natural pattern (e.g. "3x/week" isn't Mon/Wed/Fri).
+      const hours = Math.max(
+        1,
+        Math.round(intervalMs(task.cadenceCount, task.cadenceEvery || 1, task.cadenceUnit) / (60 * 60 * 1000))
+      );
+      lines.push(`RRULE:FREQ=HOURLY;INTERVAL=${hours}`);
+    }
+
+    lines.push("END:VEVENT", "END:VCALENDAR");
+
+    return lines.map(foldIcsLine).join("\r\n") + "\r\n";
+  }
+
+  function downloadIcsForTask(task) {
+    const ics = buildIcsForTask(task);
+    const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const safeName = task.label.replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "").slice(0, 40) || "task";
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${safeName}.ics`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function openCalendarPromptModal(task) {
+    pendingCalendarTask = task;
+    calendarPromptTextEl.textContent =
+      `Want to add "${task.label}" to your calendar? Download an .ics file to import into ` +
+      `Google Calendar, Apple Calendar, Outlook, and more.`;
+    calendarPromptModal.classList.remove("hidden");
+  }
+
+  function closeCalendarPromptModal() {
+    pendingCalendarTask = null;
+    calendarPromptModal.classList.add("hidden");
+  }
+
   function exportData() {
     const data = {
       exportedAt: new Date().toISOString(),
@@ -989,8 +1098,9 @@
       }
     } else {
       const now = Date.now();
+      let newTask;
       if (isOneTime) {
-        tasks.push({
+        newTask = {
           id: makeId(),
           label,
           description,
@@ -999,9 +1109,9 @@
           createdAt: now,
           totalCompletions: 0,
           onTimeCompletions: 0,
-        });
+        };
       } else {
-        tasks.push({
+        newTask = {
           id: makeId(),
           label,
           description,
@@ -1014,8 +1124,14 @@
           totalCompletions: 0,
           onTimeCompletions: 0,
           totalDeltaMs: 0,
-        });
+        };
       }
+      tasks.push(newTask);
+      saveTasks();
+      closeTaskModal();
+      render();
+      openCalendarPromptModal(newTask);
+      return;
     }
 
     saveTasks();
@@ -1118,6 +1234,15 @@
     setSyncStatus("Sync error — will retry");
   });
 
+  calendarPromptSkipBtn.addEventListener("click", closeCalendarPromptModal);
+  calendarPromptDownloadBtn.addEventListener("click", () => {
+    if (pendingCalendarTask) downloadIcsForTask(pendingCalendarTask);
+    closeCalendarPromptModal();
+  });
+  calendarPromptModal.addEventListener("click", (e) => {
+    if (e.target === calendarPromptModal) closeCalendarPromptModal();
+  });
+
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       closeTaskModal();
@@ -1125,6 +1250,7 @@
       closeHistoryModal();
       closeMetricsModal();
       closeSettingsModal();
+      closeCalendarPromptModal();
       if (!syncConflictModal.classList.contains("hidden")) cancelSyncConflict();
     }
   });
