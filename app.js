@@ -3,6 +3,7 @@
 
   const STORAGE_KEY = "task-manager:tasks";
   const HISTORY_STORAGE_KEY = "task-manager:completedLog";
+  const SYNCED_UID_KEY = "task-manager:syncedUid";
   const MAX_HISTORY_ENTRIES = 50;
   const DAY_MS = 24 * 60 * 60 * 1000;
   const WEEK_MS = 7 * DAY_MS;
@@ -64,11 +65,30 @@
   const importCancelBtn = document.getElementById("importCancelBtn");
   const importConfirmBtn = document.getElementById("importConfirmBtn");
 
+  const syncUnconfiguredEl = document.getElementById("syncUnconfigured");
+  const syncSignedOutEl = document.getElementById("syncSignedOut");
+  const syncSignedInEl = document.getElementById("syncSignedIn");
+  const syncAccountEmailEl = document.getElementById("syncAccountEmail");
+  const syncStatusEl = document.getElementById("syncStatus");
+  const syncSignInErrorEl = document.getElementById("syncSignInError");
+  const signInBtn = document.getElementById("signInBtn");
+  const signOutBtn = document.getElementById("signOutBtn");
+
+  const syncConflictModal = document.getElementById("syncConflictModal");
+  const syncConflictTextEl = document.getElementById("syncConflictText");
+  const syncConflictCancelBtn = document.getElementById("syncConflictCancelBtn");
+  const syncUseLocalBtn = document.getElementById("syncUseLocalBtn");
+  const syncUseCloudBtn = document.getElementById("syncUseCloudBtn");
+
   let tasks = loadTasks();
   let completedLog = loadCompletedLog();
   let pendingDeleteId = null;
   let statusFilter = "all";
   let pendingImportData = null;
+
+  let syncConfigured = false;
+  let cloudUser = null;
+  let pendingRemoteConflict = null;
 
   function loadTasks() {
     try {
@@ -82,6 +102,7 @@
 
   function saveTasks() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+    schedulePush();
   }
 
   function loadCompletedLog() {
@@ -96,6 +117,13 @@
 
   function saveCompletedLog() {
     localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(completedLog));
+    schedulePush();
+  }
+
+  function schedulePush() {
+    if (cloudUser && window.TaskSync) {
+      window.TaskSync.push({ tasks, completedLog });
+    }
   }
 
   function makeId() {
@@ -654,6 +682,124 @@
     settingsModal.classList.add("hidden");
   }
 
+  function setSyncStatus(text) {
+    syncStatusEl.textContent = text;
+  }
+
+  function renderSyncUi() {
+    syncUnconfiguredEl.classList.toggle("hidden", syncConfigured);
+    syncSignedOutEl.classList.toggle("hidden", !syncConfigured || Boolean(cloudUser));
+    syncSignedInEl.classList.toggle("hidden", !syncConfigured || !cloudUser);
+
+    if (cloudUser) {
+      syncAccountEmailEl.textContent = cloudUser.email || cloudUser.displayName || "Signed in";
+      setSyncStatus("Synced");
+    } else {
+      syncSignInErrorEl.classList.add("hidden");
+    }
+  }
+
+  async function handleSignIn() {
+    if (!window.TaskSync) return;
+    syncSignInErrorEl.classList.add("hidden");
+    try {
+      await window.TaskSync.signIn();
+    } catch (err) {
+      console.error("Sign-in failed", err);
+      if (err && err.code !== "auth/popup-closed-by-user" && err.code !== "auth/cancelled-popup-request") {
+        syncSignInErrorEl.textContent = "Sign-in failed. Please try again.";
+        syncSignInErrorEl.classList.remove("hidden");
+      }
+    }
+  }
+
+  async function handleSignOut() {
+    if (!window.TaskSync) return;
+    await window.TaskSync.signOutUser();
+  }
+
+  function startRemoteListener() {
+    if (!window.TaskSync) return;
+    window.TaskSync.onRemoteChange((remoteData) => {
+      tasks = Array.isArray(remoteData.tasks) ? remoteData.tasks : [];
+      completedLog = Array.isArray(remoteData.completedLog) ? remoteData.completedLog : [];
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(completedLog));
+      setSyncStatus("Synced");
+      render();
+    });
+  }
+
+  function openSyncConflictModal(remoteData) {
+    pendingRemoteConflict = remoteData;
+    const remoteTaskCount = Array.isArray(remoteData.tasks) ? remoteData.tasks.length : 0;
+    const remoteLogCount = Array.isArray(remoteData.completedLog) ? remoteData.completedLog.length : 0;
+    syncConflictTextEl.textContent =
+      `Your Google account already has cloud data: ${remoteTaskCount} task(s) and ${remoteLogCount} history ` +
+      `entr${remoteLogCount === 1 ? "y" : "ies"}. This device has ${tasks.length} task(s) and ` +
+      `${completedLog.length} history entr${completedLog.length === 1 ? "y" : "ies"}. Which do you want to keep?`;
+    syncConflictModal.classList.remove("hidden");
+  }
+
+  function closeSyncConflictModal() {
+    pendingRemoteConflict = null;
+    syncConflictModal.classList.add("hidden");
+  }
+
+  async function handleAuthChange(user) {
+    cloudUser = user;
+    renderSyncUi();
+
+    if (!user) return;
+
+    // Already reconciled this device with this account in a prior session —
+    // trust local storage and let the live listener pick up anything new.
+    if (localStorage.getItem(SYNCED_UID_KEY) === user.uid) {
+      setSyncStatus("Synced");
+      startRemoteListener();
+      return;
+    }
+
+    setSyncStatus("Checking cloud data…");
+    let remote = null;
+    try {
+      remote = await window.TaskSync.fetchRemote();
+    } catch (err) {
+      console.error("Failed to fetch cloud data", err);
+      setSyncStatus("Couldn't reach cloud sync");
+      return;
+    }
+
+    if (!remote) {
+      await window.TaskSync.pushNow({ tasks, completedLog });
+      localStorage.setItem(SYNCED_UID_KEY, user.uid);
+      setSyncStatus("Synced");
+      startRemoteListener();
+      return;
+    }
+
+    const remoteIsEmpty = (!remote.tasks || remote.tasks.length === 0) && (!remote.completedLog || remote.completedLog.length === 0);
+    const localIsEmpty = tasks.length === 0 && completedLog.length === 0;
+    if (remoteIsEmpty || localIsEmpty) {
+      if (remoteIsEmpty) {
+        await window.TaskSync.pushNow({ tasks, completedLog });
+      } else {
+        tasks = remote.tasks || [];
+        completedLog = remote.completedLog || [];
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(completedLog));
+        render();
+      }
+      localStorage.setItem(SYNCED_UID_KEY, user.uid);
+      setSyncStatus("Synced");
+      startRemoteListener();
+      return;
+    }
+
+    setSyncStatus("Action needed");
+    openSyncConflictModal(remote);
+  }
+
   function exportData() {
     const data = {
       exportedAt: new Date().toISOString(),
@@ -904,6 +1050,50 @@
   importCancelBtn.addEventListener("click", resetImportUi);
   importConfirmBtn.addEventListener("click", confirmImport);
 
+  signInBtn.addEventListener("click", handleSignIn);
+  signOutBtn.addEventListener("click", handleSignOut);
+
+  async function cancelSyncConflict() {
+    closeSyncConflictModal();
+    await handleSignOut();
+  }
+
+  syncConflictCancelBtn.addEventListener("click", cancelSyncConflict);
+  syncConflictModal.addEventListener("click", (e) => {
+    if (e.target === syncConflictModal) cancelSyncConflict();
+  });
+  syncUseLocalBtn.addEventListener("click", async () => {
+    closeSyncConflictModal();
+    setSyncStatus("Syncing…");
+    await window.TaskSync.pushNow({ tasks, completedLog });
+    if (cloudUser) localStorage.setItem(SYNCED_UID_KEY, cloudUser.uid);
+    setSyncStatus("Synced");
+    startRemoteListener();
+  });
+  syncUseCloudBtn.addEventListener("click", () => {
+    if (!pendingRemoteConflict) return;
+    tasks = pendingRemoteConflict.tasks || [];
+    completedLog = pendingRemoteConflict.completedLog || [];
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(completedLog));
+    if (cloudUser) localStorage.setItem(SYNCED_UID_KEY, cloudUser.uid);
+    closeSyncConflictModal();
+    setSyncStatus("Synced");
+    render();
+    startRemoteListener();
+  });
+
+  window.addEventListener("tasksync:ready", (e) => {
+    syncConfigured = e.detail.configured;
+    renderSyncUi();
+  });
+  window.addEventListener("tasksync:authchange", (e) => {
+    handleAuthChange(e.detail.user);
+  });
+  window.addEventListener("tasksync:error", () => {
+    setSyncStatus("Sync error — will retry");
+  });
+
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       closeTaskModal();
@@ -911,6 +1101,7 @@
       closeHistoryModal();
       closeMetricsModal();
       closeSettingsModal();
+      if (!syncConflictModal.classList.contains("hidden")) cancelSyncConflict();
     }
   });
 

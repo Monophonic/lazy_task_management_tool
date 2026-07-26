@@ -97,6 +97,30 @@
     <h2>Settings</h2>
 
     <div class="settings-section">
+      <h3 class="settings-section-title">Cloud Sync</h3>
+      <p class="settings-section-desc">Sign in with Google to keep your tasks in sync across devices.</p>
+
+      <p id="syncUnconfigured" class="sync-note hidden">
+        Cloud sync isn't set up for this deployment yet. See README.md for setup steps.
+      </p>
+
+      <div id="syncSignedOut" class="hidden">
+        <button type="button" id="signInBtn" class="btn btn-secondary">
+          <span class="google-g">G</span> Sign in with Google
+        </button>
+        <p id="syncSignInError" class="import-error hidden"></p>
+      </div>
+
+      <div id="syncSignedIn" class="sync-signed-in hidden">
+        <div class="sync-account">
+          <span id="syncAccountEmail" class="sync-account-email"></span>
+          <span id="syncStatus" class="sync-status"></span>
+        </div>
+        <button type="button" id="signOutBtn" class="btn btn-secondary">Sign Out</button>
+      </div>
+    </div>
+
+    <div class="settings-section">
       <h3 class="settings-section-title">Export Data</h3>
       <p class="settings-section-desc">Save all your tasks and completion history to a JSON file.</p>
       <button type="button" id="exportBtn" class="btn btn-secondary">Export as JSON</button>
@@ -120,6 +144,19 @@
 
     <div class="modal-actions">
       <button type="button" id="settingsCloseBtn" class="btn btn-secondary">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Sync Conflict Modal -->
+<div id="syncConflictModal" class="modal-overlay hidden">
+  <div class="modal modal-small">
+    <h2>Cloud Data Found</h2>
+    <p id="syncConflictText"></p>
+    <div class="modal-actions sync-conflict-actions">
+      <button type="button" id="syncConflictCancelBtn" class="btn btn-secondary">Cancel &amp; Sign Out</button>
+      <button type="button" id="syncUseLocalBtn" class="btn btn-secondary">Use This Device</button>
+      <button type="button" id="syncUseCloudBtn" class="btn btn-primary">Use Cloud Data</button>
     </div>
   </div>
 </div>
@@ -180,5 +217,6 @@
 </div>
 
 <script src="app.js"></script>
+<script type="module" src="sync.js"></script>
 </body>
 </html>

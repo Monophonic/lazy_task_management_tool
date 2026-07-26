@@ -502,6 +502,63 @@ body {
   margin-top: 14px;
 }
 
+.sync-note {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0;
+}
+
+.google-g {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  color: #4285f4;
+  font-weight: 700;
+  font-size: 0.7rem;
+  margin-right: 4px;
+}
+
+.sync-signed-in {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.sync-account {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sync-account-email {
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sync-status {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.sync-conflict-actions {
+  flex-wrap: wrap;
+}
+
 .metrics-section-title {
   margin: 24px 0 12px;
   font-size: 0.95rem;
