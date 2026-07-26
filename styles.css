@@ -379,10 +379,11 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .cadence-row input[type="number"] {
-  width: 70px;
+  width: 62px;
   flex: none;
 }
 
@@ -394,6 +395,7 @@ body {
 
 .cadence-row select {
   flex: 1;
+  min-width: 100px;
 }
 
 .modal-actions {

@@ -183,10 +183,12 @@
         <label for="cadenceCount">Cadence</label>
         <div class="cadence-row">
           <input type="number" id="cadenceCount" min="1" value="1" />
-          <span>time(s) per</span>
+          <span>time(s) every</span>
+          <input type="number" id="cadenceEvery" min="1" value="1" />
           <select id="cadenceUnit">
-            <option value="day">day</option>
-            <option value="week">week</option>
+            <option value="day">day(s)</option>
+            <option value="week">week(s)</option>
+            <option value="month">month(s)</option>
           </select>
         </div>
       </div>

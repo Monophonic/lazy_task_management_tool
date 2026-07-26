@@ -7,6 +7,7 @@
   const MAX_HISTORY_ENTRIES = 50;
   const DAY_MS = 24 * 60 * 60 * 1000;
   const WEEK_MS = 7 * DAY_MS;
+  const MONTH_MS = 30 * DAY_MS; // approximate — a fixed 30-day month, not calendar-exact
   const LENIENCY_MS = 6 * 60 * 60 * 1000; // +/- 6 hours
   const DUE_SOON_WINDOW_MS = DAY_MS; // flagged "due soon" within 24h of the deadline
 
@@ -25,6 +26,7 @@
   const labelInput = document.getElementById("label");
   const descriptionInput = document.getElementById("description");
   const cadenceCountInput = document.getElementById("cadenceCount");
+  const cadenceEveryInput = document.getElementById("cadenceEvery");
   const cadenceUnitInput = document.getElementById("cadenceUnit");
   const isOneTimeInput = document.getElementById("isOneTime");
   const cadenceGroupEl = document.getElementById("cadenceGroup");
@@ -131,14 +133,19 @@
     return "id-" + Date.now() + "-" + Math.random().toString(16).slice(2);
   }
 
-  function intervalMs(cadenceCount, cadenceUnit) {
-    const period = cadenceUnit === "week" ? WEEK_MS : DAY_MS;
-    return period / cadenceCount;
+  function unitMs(cadenceUnit) {
+    if (cadenceUnit === "month") return MONTH_MS;
+    if (cadenceUnit === "week") return WEEK_MS;
+    return DAY_MS;
+  }
+
+  function intervalMs(cadenceCount, cadenceEvery, cadenceUnit) {
+    return (unitMs(cadenceUnit) * cadenceEvery) / cadenceCount;
   }
 
   function nextDueAt(task) {
     if (task.isOneTime) return task.dueAt;
-    return task.lastCompletedAt + intervalMs(task.cadenceCount, task.cadenceUnit);
+    return task.lastCompletedAt + intervalMs(task.cadenceCount, task.cadenceEvery || 1, task.cadenceUnit);
   }
 
   function toDatetimeLocalValue(ms) {
@@ -153,7 +160,13 @@
   function cadenceLabel(task) {
     const unit = task.cadenceUnit;
     const n = task.cadenceCount;
-    return n === 1 ? `1 / ${unit}` : `${n} / ${unit}`;
+    const every = task.cadenceEvery || 1;
+
+    if (every === 1) {
+      return n === 1 ? `1 / ${unit}` : `${n} / ${unit}`;
+    }
+    const unitPlural = `${unit}s`;
+    return n === 1 ? `every ${every} ${unitPlural}` : `${n} every ${every} ${unitPlural}`;
   }
 
   function formatDateTime(ms) {
@@ -410,7 +423,7 @@
       return task.dueAt >= rangeStart && task.dueAt < rangeEnd ? [task.dueAt] : [];
     }
 
-    const interval = intervalMs(task.cadenceCount, task.cadenceUnit);
+    const interval = intervalMs(task.cadenceCount, task.cadenceEvery || 1, task.cadenceUnit);
     const anchor = task.lastCompletedAt;
     let n = Math.max(1, Math.ceil((rangeStart - anchor) / interval));
     const due = [];
@@ -891,6 +904,7 @@
     taskForm.reset();
     taskIdInput.value = "";
     cadenceCountInput.value = 1;
+    cadenceEveryInput.value = 1;
     cadenceUnitInput.value = "day";
     dueDateInput.value = toDatetimeLocalValue(Date.now() + DAY_MS);
     setOneTimeMode(false);
@@ -910,10 +924,12 @@
     if (task.isOneTime) {
       dueDateInput.value = toDatetimeLocalValue(task.dueAt);
       cadenceCountInput.value = 1;
+      cadenceEveryInput.value = 1;
       cadenceUnitInput.value = "day";
       setOneTimeMode(true);
     } else {
       cadenceCountInput.value = task.cadenceCount;
+      cadenceEveryInput.value = task.cadenceEvery || 1;
       cadenceUnitInput.value = task.cadenceUnit;
       dueDateInput.value = toDatetimeLocalValue(Date.now() + DAY_MS);
       setOneTimeMode(false);
@@ -937,6 +953,11 @@
     confirmModal.classList.add("hidden");
   }
 
+  function readCadenceUnit() {
+    const value = cadenceUnitInput.value;
+    return value === "week" || value === "month" ? value : "day";
+  }
+
   taskForm.addEventListener("submit", (e) => {
     e.preventDefault();
 
@@ -957,10 +978,12 @@
         if (isOneTime) {
           task.dueAt = fromDatetimeLocalValue(dueDateInput.value);
           delete task.cadenceCount;
+          delete task.cadenceEvery;
           delete task.cadenceUnit;
         } else {
           task.cadenceCount = Math.max(1, parseInt(cadenceCountInput.value, 10) || 1);
-          task.cadenceUnit = cadenceUnitInput.value === "week" ? "week" : "day";
+          task.cadenceEvery = Math.max(1, parseInt(cadenceEveryInput.value, 10) || 1);
+          task.cadenceUnit = readCadenceUnit();
           delete task.dueAt;
         }
       }
@@ -984,7 +1007,8 @@
           description,
           isOneTime: false,
           cadenceCount: Math.max(1, parseInt(cadenceCountInput.value, 10) || 1),
-          cadenceUnit: cadenceUnitInput.value === "week" ? "week" : "day",
+          cadenceEvery: Math.max(1, parseInt(cadenceEveryInput.value, 10) || 1),
+          cadenceUnit: readCadenceUnit(),
           createdAt: now,
           lastCompletedAt: now,
           totalCompletions: 0,
