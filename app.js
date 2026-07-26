@@ -32,6 +32,10 @@
   const cadenceGroupEl = document.getElementById("cadenceGroup");
   const dueDateGroupEl = document.getElementById("dueDateGroup");
   const dueDateInput = document.getElementById("dueDate");
+  const rescheduleGroupEl = document.getElementById("rescheduleGroup");
+  const rescheduleToggleInput = document.getElementById("rescheduleToggle");
+  const rescheduleDateGroupEl = document.getElementById("rescheduleDateGroup");
+  const rescheduleDateInput = document.getElementById("rescheduleDate");
   const cancelBtn = document.getElementById("cancelBtn");
 
   const confirmModal = document.getElementById("confirmModal");
@@ -376,7 +380,7 @@
 
         meta.innerHTML = `
           <span>Cadence: <strong>${cadenceLabel(task)}</strong></span>
-          <span>Last done: <strong>${task.totalCompletions > 0 ? formatDateTime(task.lastCompletedAt) : "never"}</strong></span>
+          <span>Last done: <strong>${task.totalCompletions > 0 ? formatDateTime(task.lastCompletedDisplayAt || task.lastCompletedAt) : "never"}</strong></span>
           <span>Completed: <strong>${task.totalCompletions}</strong></span>
           <span>On time: <strong>${task.onTimeCompletions}${onTimeRate !== null ? ` (${onTimeRate}%)` : ""}</strong></span>
         `;
@@ -526,6 +530,7 @@
     if (onTime) task.onTimeCompletions += 1;
     task.totalDeltaMs = (task.totalDeltaMs || 0) + delta;
     task.lastCompletedAt = now;
+    task.lastCompletedDisplayAt = now;
 
     saveTasks();
     render();
@@ -1006,6 +1011,12 @@
     isOneTimeInput.checked = isOneTime;
     cadenceGroupEl.classList.toggle("hidden", isOneTime);
     dueDateGroupEl.classList.toggle("hidden", !isOneTime);
+    if (isOneTime) rescheduleGroupEl.classList.add("hidden");
+  }
+
+  function resetRescheduleUi() {
+    rescheduleToggleInput.checked = false;
+    rescheduleDateGroupEl.classList.add("hidden");
   }
 
   function openAddModal() {
@@ -1016,6 +1027,8 @@
     cadenceEveryInput.value = 1;
     cadenceUnitInput.value = "day";
     dueDateInput.value = toDatetimeLocalValue(Date.now() + DAY_MS);
+    rescheduleGroupEl.classList.add("hidden");
+    resetRescheduleUi();
     setOneTimeMode(false);
     taskModal.classList.remove("hidden");
     labelInput.focus();
@@ -1029,6 +1042,7 @@
     taskIdInput.value = task.id;
     labelInput.value = task.label;
     descriptionInput.value = task.description || "";
+    resetRescheduleUi();
 
     if (task.isOneTime) {
       dueDateInput.value = toDatetimeLocalValue(task.dueAt);
@@ -1041,6 +1055,8 @@
       cadenceEveryInput.value = task.cadenceEvery || 1;
       cadenceUnitInput.value = task.cadenceUnit;
       dueDateInput.value = toDatetimeLocalValue(Date.now() + DAY_MS);
+      rescheduleGroupEl.classList.remove("hidden");
+      rescheduleDateInput.value = toDatetimeLocalValue(nextDueAt(task));
       setOneTimeMode(false);
     }
 
@@ -1077,6 +1093,7 @@
 
     if (!label) return;
     if (isOneTime && !dueDateInput.value) return;
+    if (!isOneTime && rescheduleToggleInput.checked && !rescheduleDateInput.value) return;
 
     if (id) {
       const task = tasks.find((t) => t.id === id);
@@ -1094,6 +1111,11 @@
           task.cadenceEvery = Math.max(1, parseInt(cadenceEveryInput.value, 10) || 1);
           task.cadenceUnit = readCadenceUnit();
           delete task.dueAt;
+
+          if (rescheduleToggleInput.checked) {
+            const newDueAt = fromDatetimeLocalValue(rescheduleDateInput.value);
+            task.lastCompletedAt = newDueAt - intervalMs(task.cadenceCount, task.cadenceEvery, task.cadenceUnit);
+          }
         }
       }
     } else {
@@ -1140,6 +1162,9 @@
   });
 
   isOneTimeInput.addEventListener("change", () => setOneTimeMode(isOneTimeInput.checked));
+  rescheduleToggleInput.addEventListener("change", () => {
+    rescheduleDateGroupEl.classList.toggle("hidden", !rescheduleToggleInput.checked);
+  });
   addTaskBtn.addEventListener("click", openAddModal);
 
   statusFiltersEl.addEventListener("click", (e) => {

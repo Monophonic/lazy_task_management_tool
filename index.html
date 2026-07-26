@@ -198,6 +198,20 @@
         <input type="datetime-local" id="dueDate" />
       </div>
 
+      <div id="rescheduleGroup" class="hidden">
+        <label class="checkbox-row" for="rescheduleToggle">
+          <input type="checkbox" id="rescheduleToggle" />
+          Manually set next due date
+        </label>
+        <div id="rescheduleDateGroup" class="hidden">
+          <input type="datetime-local" id="rescheduleDate" />
+          <p class="reschedule-hint">
+            Use this if you're skipping this occurrence for a legitimate reason —
+            it won't be logged as a completion or a miss, and won't affect your stats.
+          </p>
+        </div>
+      </div>
+
       <div class="modal-actions">
         <button type="button" id="cancelBtn" class="btn btn-secondary">Cancel</button>
         <button type="submit" class="btn btn-primary">Save Task</button>

@@ -375,6 +375,17 @@ body {
   cursor: pointer;
 }
 
+#rescheduleDateGroup {
+  margin-top: 10px;
+}
+
+.reschedule-hint {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
 .cadence-row {
   display: flex;
   align-items: center;
