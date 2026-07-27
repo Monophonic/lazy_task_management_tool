@@ -3,6 +3,7 @@
 
   const STORAGE_KEY = "task-manager:tasks";
   const HISTORY_STORAGE_KEY = "task-manager:completedLog";
+  const TAGS_STORAGE_KEY = "task-manager:tags";
   const SYNCED_UID_KEY = "task-manager:syncedUid";
   const MAX_HISTORY_DISPLAY_ENTRIES = 100; // display-only cap for the History modal; storage itself is unlimited
   const DAY_MS = 24 * 60 * 60 * 1000;
@@ -27,6 +28,7 @@
   const taskIdInput = document.getElementById("taskId");
   const labelInput = document.getElementById("label");
   const descriptionInput = document.getElementById("description");
+  const taskTagInput = document.getElementById("taskTag");
   const cadenceCountInput = document.getElementById("cadenceCount");
   const cadenceEveryInput = document.getElementById("cadenceEvery");
   const cadenceUnitInput = document.getElementById("cadenceUnit");
@@ -82,6 +84,13 @@
   const importCancelBtn = document.getElementById("importCancelBtn");
   const importConfirmBtn = document.getElementById("importConfirmBtn");
 
+  const tagFilterButtonsEl = document.getElementById("tagFilterButtons");
+  const newTagInput = document.getElementById("newTagInput");
+  const addTagBtn = document.getElementById("addTagBtn");
+  const tagAddErrorEl = document.getElementById("tagAddError");
+  const tagManageListEl = document.getElementById("tagManageList");
+  const tagManageEmptyEl = document.getElementById("tagManageEmpty");
+
   const syncUnconfiguredEl = document.getElementById("syncUnconfigured");
   const syncSignedOutEl = document.getElementById("syncSignedOut");
   const syncSignedInEl = document.getElementById("syncSignedIn");
@@ -104,8 +113,11 @@
 
   let tasks = loadTasks();
   let completedLog = loadCompletedLog();
+  let tags = loadTags();
   let pendingDeleteId = null;
-  let statusFilter = "all";
+  // { type: "status", value: "all"|"overdue"|"due-soon"|"ok" } or { type: "tag", value: "<tagName>" } —
+  // status and tag filters share one active selection, exactly like the status filters alone used to.
+  let activeFilter = { type: "status", value: "all" };
   let pendingImportData = null;
   let pendingCalendarTask = null;
 
@@ -149,9 +161,25 @@
     schedulePush();
   }
 
+  function loadTags() {
+    try {
+      const raw = localStorage.getItem(TAGS_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      console.error("Failed to load tags from localStorage", err);
+      return [];
+    }
+  }
+
+  function saveTags() {
+    localStorage.setItem(TAGS_STORAGE_KEY, JSON.stringify(tags));
+    schedulePush();
+  }
+
   function schedulePush() {
     if (cloudUser && window.TaskSync) {
-      window.TaskSync.push({ tasks, completedLog });
+      window.TaskSync.push({ tasks, completedLog, tags });
     }
   }
 
@@ -186,11 +214,11 @@
     return Array.from(byKey.values()).sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
   }
 
-  // Mirrors exactly what gets pushed to Firestore ({tasks, completedLog}), so
-  // this is a good proxy for both the local-storage footprint and the cloud
-  // sync document size.
+  // Mirrors exactly what gets pushed to Firestore ({tasks, completedLog, tags}),
+  // so this is a good proxy for both the local-storage footprint and the
+  // cloud sync document size.
   function estimateDataSizeBytes() {
-    return new Blob([JSON.stringify({ tasks, completedLog })]).size;
+    return new Blob([JSON.stringify({ tasks, completedLog, tags })]).size;
   }
 
   function makeId() {
@@ -364,14 +392,33 @@
     return `On track · due ${formatRelative(due)}`;
   }
 
-  function updateStatusFilters(entries) {
+  function updateFilterBar(entries) {
     const counts = { all: entries.length, overdue: 0, "due-soon": 0, ok: 0 };
     for (const { status } of entries) counts[status] += 1;
 
-    for (const btn of statusFiltersEl.querySelectorAll(".filter-btn")) {
+    for (const btn of statusFiltersEl.querySelectorAll(".filter-btn[data-filter]")) {
       const filter = btn.dataset.filter;
-      btn.classList.toggle("active", filter === statusFilter);
+      btn.classList.toggle("active", activeFilter.type === "status" && activeFilter.value === filter);
       btn.querySelector(".filter-count").textContent = `(${counts[filter]})`;
+    }
+
+    const tagCounts = new Map(tags.map((t) => [t, 0]));
+    for (const { task } of entries) {
+      if (task.tag && tagCounts.has(task.tag)) tagCounts.set(task.tag, tagCounts.get(task.tag) + 1);
+    }
+
+    tagFilterButtonsEl.innerHTML = "";
+    for (const tag of tags) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "badge filter-btn" + (activeFilter.type === "tag" && activeFilter.value === tag ? " active" : "");
+      btn.dataset.tag = tag;
+      btn.appendChild(document.createTextNode(`${tag} `));
+      const countSpan = document.createElement("span");
+      countSpan.className = "filter-count";
+      countSpan.textContent = `(${tagCounts.get(tag) || 0})`;
+      btn.appendChild(countSpan);
+      tagFilterButtonsEl.appendChild(btn);
     }
   }
 
@@ -380,9 +427,12 @@
       .map((task) => ({ task, due: nextDueAt(task), status: getStatus(task) }))
       .sort((a, b) => a.due - b.due);
 
-    updateStatusFilters(entries);
+    updateFilterBar(entries);
 
-    const visible = statusFilter === "all" ? entries : entries.filter((e) => e.status === statusFilter);
+    const visible = entries.filter((e) => {
+      if (activeFilter.type === "tag") return e.task.tag === activeFilter.value;
+      return activeFilter.value === "all" || e.status === activeFilter.value;
+    });
 
     taskListEl.innerHTML = "";
     emptyStateEl.classList.toggle("hidden", visible.length > 0);
@@ -410,6 +460,12 @@
       badge.innerHTML = `<span class="badge-dot"></span>${statusLabel(status, due)}`;
 
       topRow.appendChild(labelEl);
+      if (task.tag) {
+        const tagChip = document.createElement("span");
+        tagChip.className = "task-tag-chip";
+        tagChip.textContent = task.tag;
+        topRow.appendChild(tagChip);
+      }
       topRow.appendChild(badge);
       main.appendChild(topRow);
 
@@ -874,9 +930,78 @@
     }
   }
 
+  function renderTagManageList() {
+    tagAddErrorEl.classList.add("hidden");
+    tagManageListEl.innerHTML = "";
+    tagManageEmptyEl.classList.toggle("hidden", tags.length > 0);
+
+    for (const tag of tags) {
+      const row = document.createElement("div");
+      row.className = "tag-manage-row";
+
+      const label = document.createElement("span");
+      label.className = "tag-manage-label";
+      label.textContent = tag;
+
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "btn-icon";
+      removeBtn.title = `Remove tag "${tag}"`;
+      removeBtn.setAttribute("aria-label", `Remove tag ${tag}`);
+      removeBtn.textContent = "✕";
+      removeBtn.addEventListener("click", () => removeTag(tag));
+
+      row.appendChild(label);
+      row.appendChild(removeBtn);
+      tagManageListEl.appendChild(row);
+    }
+  }
+
+  function addTag() {
+    const raw = newTagInput.value.trim();
+    if (!raw) return;
+
+    const exists = tags.some((t) => t.toLowerCase() === raw.toLowerCase());
+    if (exists) {
+      tagAddErrorEl.textContent = `A tag named "${raw}" already exists.`;
+      tagAddErrorEl.classList.remove("hidden");
+      return;
+    }
+
+    tags.push(raw);
+    saveTags();
+    newTagInput.value = "";
+    renderTagManageList();
+    render();
+  }
+
+  function removeTag(tag) {
+    tags = tags.filter((t) => t !== tag);
+    saveTags();
+
+    // Un-tag any tasks that referenced the removed tag, so nothing points at
+    // a tag that no longer exists.
+    let changed = false;
+    for (const task of tasks) {
+      if (task.tag === tag) {
+        delete task.tag;
+        changed = true;
+      }
+    }
+    if (changed) saveTasks();
+
+    if (activeFilter.type === "tag" && activeFilter.value === tag) {
+      activeFilter = { type: "status", value: "all" };
+    }
+
+    renderTagManageList();
+    render();
+  }
+
   function openSettingsModal() {
     resetImportUi();
     renderStorageUsage();
+    renderTagManageList();
     settingsModal.classList.remove("hidden");
   }
 
@@ -929,8 +1054,10 @@
       // here (not just rare one-time-task completions), so a wholesale
       // overwrite risks losing another device's just-made event.
       completedLog = mergeCompletedLogs(completedLog, Array.isArray(remoteData.completedLog) ? remoteData.completedLog : []);
+      tags = Array.isArray(remoteData.tags) ? remoteData.tags : [];
       localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
       localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(completedLog));
+      localStorage.setItem(TAGS_STORAGE_KEY, JSON.stringify(tags));
       setSyncStatus("Synced");
       render();
     });
@@ -977,7 +1104,7 @@
     }
 
     if (!remote) {
-      await window.TaskSync.pushNow({ tasks, completedLog });
+      await window.TaskSync.pushNow({ tasks, completedLog, tags });
       localStorage.setItem(SYNCED_UID_KEY, user.uid);
       setSyncStatus("Synced");
       startRemoteListener();
@@ -988,12 +1115,14 @@
     const localIsEmpty = tasks.length === 0 && completedLog.length === 0;
     if (remoteIsEmpty || localIsEmpty) {
       if (remoteIsEmpty) {
-        await window.TaskSync.pushNow({ tasks, completedLog });
+        await window.TaskSync.pushNow({ tasks, completedLog, tags });
       } else {
         tasks = remote.tasks || [];
         completedLog = remote.completedLog || [];
+        tags = remote.tags || [];
         localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
         localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(completedLog));
+        localStorage.setItem(TAGS_STORAGE_KEY, JSON.stringify(tags));
         render();
       }
       localStorage.setItem(SYNCED_UID_KEY, user.uid);
@@ -1119,6 +1248,7 @@
       exportedAt: new Date().toISOString(),
       tasks,
       completedLog,
+      tags,
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -1142,10 +1272,14 @@
     }
 
     if (Array.isArray(parsed)) {
-      return { tasks: parsed, completedLog: [] };
+      return { tasks: parsed, completedLog: [], tags: [] };
     }
     if (parsed && Array.isArray(parsed.tasks)) {
-      return { tasks: parsed.tasks, completedLog: Array.isArray(parsed.completedLog) ? parsed.completedLog : [] };
+      return {
+        tasks: parsed.tasks,
+        completedLog: Array.isArray(parsed.completedLog) ? parsed.completedLog : [],
+        tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+      };
     }
     return { error: "This file doesn't look like a task export." };
   }
@@ -1188,8 +1322,10 @@
     if (!pendingImportData) return;
     tasks = pendingImportData.tasks;
     completedLog = pendingImportData.completedLog;
+    tags = pendingImportData.tags || [];
     saveTasks();
     saveCompletedLog();
+    saveTags();
     closeSettingsModal();
     render();
   }
@@ -1206,10 +1342,26 @@
     rescheduleDateGroupEl.classList.add("hidden");
   }
 
+  function populateTagSelect(selectedTag) {
+    taskTagInput.innerHTML = "";
+    const noneOpt = document.createElement("option");
+    noneOpt.value = "";
+    noneOpt.textContent = "No tag";
+    taskTagInput.appendChild(noneOpt);
+    for (const tag of tags) {
+      const opt = document.createElement("option");
+      opt.value = tag;
+      opt.textContent = tag;
+      taskTagInput.appendChild(opt);
+    }
+    taskTagInput.value = selectedTag || "";
+  }
+
   function openAddModal() {
     modalTitle.textContent = "Add Task";
     taskForm.reset();
     taskIdInput.value = "";
+    populateTagSelect("");
     cadenceCountInput.value = 1;
     cadenceEveryInput.value = 1;
     cadenceUnitInput.value = "day";
@@ -1229,6 +1381,7 @@
     taskIdInput.value = task.id;
     labelInput.value = task.label;
     descriptionInput.value = task.description || "";
+    populateTagSelect(task.tag || "");
     resetRescheduleUi();
 
     if (task.isOneTime) {
@@ -1276,6 +1429,7 @@
     const id = taskIdInput.value;
     const label = labelInput.value.trim();
     const description = descriptionInput.value.trim();
+    const tagValue = taskTagInput.value;
     const isOneTime = isOneTimeInput.checked;
 
     if (!label) return;
@@ -1297,6 +1451,8 @@
 
         task.label = label;
         task.description = description;
+        if (tagValue) task.tag = tagValue;
+        else delete task.tag;
         task.isOneTime = isOneTime;
         if (isOneTime) {
           task.dueAt = fromDatetimeLocalValue(dueDateInput.value);
@@ -1340,6 +1496,7 @@
           id: makeId(),
           label,
           description,
+          tag: tagValue || undefined,
           isOneTime: true,
           dueAt: fromDatetimeLocalValue(dueDateInput.value),
           createdAt: now,
@@ -1351,6 +1508,7 @@
           id: makeId(),
           label,
           description,
+          tag: tagValue || undefined,
           isOneTime: false,
           cadenceCount: Math.max(1, parseInt(cadenceCountInput.value, 10) || 1),
           cadenceEvery: Math.max(1, parseInt(cadenceEveryInput.value, 10) || 1),
@@ -1384,7 +1542,9 @@
   statusFiltersEl.addEventListener("click", (e) => {
     const btn = e.target.closest(".filter-btn");
     if (!btn) return;
-    statusFilter = btn.dataset.filter;
+    activeFilter = btn.dataset.tag !== undefined
+      ? { type: "tag", value: btn.dataset.tag }
+      : { type: "status", value: btn.dataset.filter };
     render();
   });
   cancelBtn.addEventListener("click", closeTaskModal);
@@ -1446,6 +1606,14 @@
     if (e.target === settingsModal) closeSettingsModal();
   });
 
+  addTagBtn.addEventListener("click", addTag);
+  newTagInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addTag();
+    }
+  });
+
   exportBtn.addEventListener("click", exportData);
   importBtn.addEventListener("click", () => importFileInput.click());
   importFileInput.addEventListener("change", handleImportFile);
@@ -1474,7 +1642,7 @@
     }
     closeSyncConflictModal();
     setSyncStatus("Syncing…");
-    await window.TaskSync.pushNow({ tasks, completedLog });
+    await window.TaskSync.pushNow({ tasks, completedLog, tags });
     if (cloudUser) localStorage.setItem(SYNCED_UID_KEY, cloudUser.uid);
     setSyncStatus("Synced");
     render();
@@ -1486,8 +1654,10 @@
     // Same reasoning as above: tasks take the cloud's version outright, but
     // completedLog is merged so this device's own events aren't discarded.
     completedLog = mergeCompletedLogs(completedLog, pendingRemoteConflict.completedLog || []);
+    tags = pendingRemoteConflict.tags || [];
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
     localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(completedLog));
+    localStorage.setItem(TAGS_STORAGE_KEY, JSON.stringify(tags));
     if (cloudUser) localStorage.setItem(SYNCED_UID_KEY, cloudUser.uid);
     closeSyncConflictModal();
     setSyncStatus("Synced");

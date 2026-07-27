@@ -36,6 +36,7 @@
         <button type="button" class="badge ok filter-btn" data-filter="ok">
           <span class="badge-dot"></span>On track <span class="filter-count"></span>
         </button>
+        <div id="tagFilterButtons" class="tag-filter-group"></div>
       </div>
 
       <div id="emptyState" class="empty-state hidden">
@@ -150,6 +151,18 @@
     </div>
 
     <div class="settings-section">
+      <h3 class="settings-section-title">Tags</h3>
+      <p class="settings-section-desc">Create tags to organize and filter your tasks.</p>
+      <div class="tag-add-row">
+        <input type="text" id="newTagInput" placeholder="e.g. Work" maxlength="30" />
+        <button type="button" id="addTagBtn" class="btn btn-secondary">Add Tag</button>
+      </div>
+      <p id="tagAddError" class="import-error hidden"></p>
+      <div id="tagManageList" class="tag-manage-list"></div>
+      <p id="tagManageEmpty" class="history-empty hidden">No tags yet.</p>
+    </div>
+
+    <div class="settings-section">
       <h3 class="settings-section-title">Export Data</h3>
       <p class="settings-section-desc">Save all your tasks and completion history to a JSON file.</p>
       <button type="button" id="exportBtn" class="btn btn-secondary">Export as JSON</button>
@@ -202,6 +215,11 @@
 
       <label for="description">Description</label>
       <textarea id="description" rows="3" placeholder="Optional details about this task"></textarea>
+
+      <label for="taskTag">Tag</label>
+      <select id="taskTag">
+        <option value="">No tag</option>
+      </select>
 
       <label class="checkbox-row" for="isOneTime">
         <input type="checkbox" id="isOneTime" />
