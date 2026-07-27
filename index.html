@@ -291,6 +291,21 @@
   </div>
 </div>
 
+<!-- Resolve Task Modal -->
+<div id="resolveModal" class="modal-overlay hidden">
+  <div class="modal modal-small">
+    <h2>Resolve Task?</h2>
+    <p id="resolveText"></p>
+    <p>Reason</p>
+    <input type="text" id="resolveReason" placeholder="e.g. Roommate did it" maxlength="200" />
+    <p id="resolveReasonError" class="import-error hidden">Please enter a reason.</p>
+    <div class="modal-actions">
+      <button type="button" id="resolveCancelBtn" class="btn btn-secondary">Cancel</button>
+      <button type="button" id="resolveConfirmBtn" class="btn btn-danger">Resolve</button>
+    </div>
+  </div>
+</div>
+
 <script src="app.js"></script>
 <script type="module" src="sync.js"></script>
 </body>

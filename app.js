@@ -46,6 +46,13 @@
   const confirmDeleteBtn = document.getElementById("confirmDeleteBtn");
   const confirmCancelBtn = document.getElementById("confirmCancelBtn");
 
+  const resolveModal = document.getElementById("resolveModal");
+  const resolveTextEl = document.getElementById("resolveText");
+  const resolveReasonInput = document.getElementById("resolveReason");
+  const resolveReasonErrorEl = document.getElementById("resolveReasonError");
+  const resolveCancelBtn = document.getElementById("resolveCancelBtn");
+  const resolveConfirmBtn = document.getElementById("resolveConfirmBtn");
+
   const historyBtn = document.getElementById("historyBtn");
   const historyModal = document.getElementById("historyModal");
   const historyCloseBtn = document.getElementById("historyCloseBtn");
@@ -115,6 +122,7 @@
   let completedLog = loadCompletedLog();
   let tags = loadTags();
   let pendingDeleteId = null;
+  let pendingResolveId = null;
   // { type: "status", value: "all"|"overdue"|"due-soon"|"ok" } or { type: "tag", value: "<tagName>" } —
   // status and tag filters share one active selection, exactly like the status filters alone used to.
   let activeFilter = { type: "status", value: "all" };
@@ -513,6 +521,13 @@
       editBtn.textContent = "✎";
       editBtn.addEventListener("click", () => openEditModal(task.id));
 
+      const resolveBtn = document.createElement("button");
+      resolveBtn.className = "btn-icon";
+      resolveBtn.title = "Resolve without completing";
+      resolveBtn.setAttribute("aria-label", "Resolve task without completing");
+      resolveBtn.textContent = "⊘";
+      resolveBtn.addEventListener("click", () => openResolveConfirm(task.id));
+
       const deleteBtn = document.createElement("button");
       deleteBtn.className = "btn-icon";
       deleteBtn.title = "Delete task";
@@ -522,6 +537,7 @@
 
       actions.appendChild(completeBtn);
       actions.appendChild(editBtn);
+      actions.appendChild(resolveBtn);
       actions.appendChild(deleteBtn);
 
       li.appendChild(main);
@@ -661,6 +677,55 @@
       completedAt: now,
       onTime,
       deltaMs: delta,
+    });
+    saveCompletedLog();
+
+    saveTasks();
+    render();
+  }
+
+  function resolveTask(id, reason) {
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+
+    if (task.isOneTime) {
+      completedLog.unshift({
+        eventId: makeId(),
+        id: task.id,
+        label: task.label,
+        type: "resolved",
+        isOneTime: true,
+        at: Date.now(),
+        dueAt: task.dueAt,
+        reason,
+      });
+      saveCompletedLog();
+
+      tasks = tasks.filter((t) => t.id !== id);
+      saveTasks();
+      render();
+      return;
+    }
+
+    const previousDue = nextDueAt(task);
+    const now = Date.now();
+
+    // Advances the schedule anchor only — deliberately does NOT touch
+    // lastCompletedDisplayAt/totalCompletions/onTimeCompletions/totalDeltaMs,
+    // since those track the user's own follow-through and this occurrence
+    // wasn't completed by them. Mirrors the reschedule feature's anchor-vs-
+    // display split.
+    task.lastCompletedAt = now;
+
+    completedLog.unshift({
+      eventId: makeId(),
+      id: task.id,
+      label: task.label,
+      type: "resolved",
+      isOneTime: false,
+      at: now,
+      dueAt: previousDue,
+      reason,
     });
     saveCompletedLog();
 
@@ -1418,6 +1483,24 @@
     confirmModal.classList.add("hidden");
   }
 
+  function openResolveConfirm(id) {
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+    pendingResolveId = id;
+    resolveReasonInput.value = "";
+    resolveReasonErrorEl.classList.add("hidden");
+    resolveTextEl.textContent = task.isOneTime
+      ? "Mark this task as resolved without completing it. This removes it from your list and cannot be undone."
+      : "Mark this occurrence as resolved without completing it yourself. The task keeps recurring as normal — this occurrence just won't count toward your own completion stats.";
+    resolveModal.classList.remove("hidden");
+    resolveReasonInput.focus();
+  }
+
+  function closeResolveConfirm() {
+    pendingResolveId = null;
+    resolveModal.classList.add("hidden");
+  }
+
   function readCadenceUnit() {
     const value = cadenceUnitInput.value;
     return value === "week" || value === "month" ? value : "day";
@@ -1565,6 +1648,22 @@
     if (e.target === confirmModal) closeDeleteConfirm();
   });
 
+  resolveConfirmBtn.addEventListener("click", () => {
+    if (!pendingResolveId) return;
+    const reason = resolveReasonInput.value.trim();
+    if (!reason) {
+      resolveReasonErrorEl.classList.remove("hidden");
+      resolveReasonInput.focus();
+      return;
+    }
+    resolveTask(pendingResolveId, reason);
+    closeResolveConfirm();
+  });
+  resolveCancelBtn.addEventListener("click", closeResolveConfirm);
+  resolveModal.addEventListener("click", (e) => {
+    if (e.target === resolveModal) closeResolveConfirm();
+  });
+
   historyBtn.addEventListener("click", openHistoryModal);
   historyCloseBtn.addEventListener("click", closeHistoryModal);
   historyModal.addEventListener("click", (e) => {
@@ -1689,6 +1788,7 @@
     if (e.key === "Escape") {
       closeTaskModal();
       closeDeleteConfirm();
+      closeResolveConfirm();
       closeHistoryModal();
       closeMetricsModal();
       closeSettingsModal();
