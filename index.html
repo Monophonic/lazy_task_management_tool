@@ -92,21 +92,45 @@
       Only includes completions logged since date-tracking was added — older history isn't retroactively available.
     </p>
 
-    <div class="metrics-overview">
-      <div class="donut-wrap" id="overallDonutWrap"></div>
-      <div class="metrics-overview-stats" id="overviewStats"></div>
+    <div id="metricsTabs" class="filter-bar">
+      <button type="button" class="badge filter-btn active" data-tab="overview">Overview</button>
+      <button type="button" class="badge filter-btn" data-tab="resolved">Resolved</button>
     </div>
 
-    <h3 class="metrics-section-title">Recurring Task Health</h3>
-    <div id="taskHealthList" class="health-list"></div>
-    <p id="taskHealthEmpty" class="history-empty hidden">Complete a recurring task at least once to see health data.</p>
+    <div id="metricsOverviewPanel">
+      <div class="metrics-overview">
+        <div class="donut-wrap" id="overallDonutWrap"></div>
+        <div class="metrics-overview-stats" id="overviewStats"></div>
+      </div>
 
-    <h3 class="metrics-section-title">One-Time Task Completion</h3>
-    <div id="oneTimeHealth"></div>
-    <p id="oneTimeHealthEmpty" class="history-empty hidden">No one-time tasks completed yet.</p>
+      <h3 class="metrics-section-title">Recurring Task Health</h3>
+      <div id="taskHealthList" class="health-list"></div>
+      <p id="taskHealthEmpty" class="history-empty hidden">Complete a recurring task at least once to see health data.</p>
+
+      <h3 class="metrics-section-title">One-Time Task Completion</h3>
+      <div id="oneTimeHealth"></div>
+      <p id="oneTimeHealthEmpty" class="history-empty hidden">No one-time tasks completed yet.</p>
+    </div>
+
+    <div id="metricsResolvedPanel" class="hidden">
+      <h3 class="metrics-section-title">Resolved Without You</h3>
+      <div id="resolvedHealthList" class="health-list"></div>
+      <p id="resolvedHealthEmpty" class="history-empty hidden">No tasks resolved without you yet.</p>
+    </div>
 
     <div class="modal-actions">
       <button type="button" id="metricsCloseBtn" class="btn btn-secondary">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Resolved Reasons Modal -->
+<div id="resolvedReasonsModal" class="modal-overlay hidden">
+  <div class="modal">
+    <h2 id="resolvedReasonsTitle">Resolved Without You</h2>
+    <ul id="resolvedReasonsList" class="history-log"></ul>
+    <div class="modal-actions">
+      <button type="button" id="resolvedReasonsCloseBtn" class="btn btn-secondary">Close</button>
     </div>
   </div>
 </div>

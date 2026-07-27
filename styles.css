@@ -746,6 +746,14 @@ body {
   font-size: 0.85rem;
 }
 
+.health-row-label-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
 .health-row-label {
   font-weight: 600;
   white-space: nowrap;
@@ -764,6 +772,18 @@ body {
   border-radius: 100px;
   background: var(--bg);
   overflow: hidden;
+}
+
+.health-row-clickable {
+  cursor: pointer;
+  padding: 6px;
+  margin: -6px;
+  border-radius: 8px;
+  transition: background 0.15s ease;
+}
+
+.health-row-clickable:hover {
+  background: var(--bg);
 }
 
 .health-bar-fill {

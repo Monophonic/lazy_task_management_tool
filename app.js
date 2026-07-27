@@ -75,6 +75,16 @@
   const metricsRangeToInput = document.getElementById("metricsRangeTo");
   const metricsRangeApplyBtn = document.getElementById("metricsRangeApplyBtn");
   const metricsRangeNoteEl = document.getElementById("metricsRangeNote");
+  const metricsTabsEl = document.getElementById("metricsTabs");
+  const metricsOverviewPanelEl = document.getElementById("metricsOverviewPanel");
+  const metricsResolvedPanelEl = document.getElementById("metricsResolvedPanel");
+  const resolvedHealthListEl = document.getElementById("resolvedHealthList");
+  const resolvedHealthEmptyEl = document.getElementById("resolvedHealthEmpty");
+
+  const resolvedReasonsModal = document.getElementById("resolvedReasonsModal");
+  const resolvedReasonsTitleEl = document.getElementById("resolvedReasonsTitle");
+  const resolvedReasonsListEl = document.getElementById("resolvedReasonsList");
+  const resolvedReasonsCloseBtn = document.getElementById("resolvedReasonsCloseBtn");
 
   const settingsBtn = document.getElementById("settingsBtn");
   const settingsModal = document.getElementById("settingsModal");
@@ -138,6 +148,9 @@
   let metricsRangeKey = "all";
   let metricsCustomFrom = null; // ms, start of the "from" day, when metricsRangeKey === "custom"
   let metricsCustomTo = null; // ms, end of the "to" day, when metricsRangeKey === "custom"
+
+  // "overview" | "resolved" — persists across modal open/close, like metricsRangeKey.
+  let metricsTab = "overview";
 
   function loadTasks() {
     try {
@@ -363,22 +376,33 @@
     </svg>`;
   }
 
-  function buildHealthRow(label, detailText, pct, color, noData) {
+  function buildHealthRow(label, detailText, pct, color, noData, tag) {
     const row = document.createElement("div");
     row.className = "health-row" + (noData ? " no-data" : "");
 
     const top = document.createElement("div");
     top.className = "health-row-top";
 
+    const labelWrap = document.createElement("span");
+    labelWrap.className = "health-row-label-wrap";
+
     const labelEl = document.createElement("span");
     labelEl.className = "health-row-label";
     labelEl.textContent = label;
+    labelWrap.appendChild(labelEl);
+
+    if (tag) {
+      const tagChip = document.createElement("span");
+      tagChip.className = "task-tag-chip";
+      tagChip.textContent = tag;
+      labelWrap.appendChild(tagChip);
+    }
 
     const detailEl = document.createElement("span");
     detailEl.className = "health-row-detail";
     detailEl.textContent = detailText;
 
-    top.appendChild(labelEl);
+    top.appendChild(labelWrap);
     top.appendChild(detailEl);
 
     const track = document.createElement("div");
@@ -830,8 +854,121 @@
     metricsRangeNoteEl.classList.toggle("hidden", metricsRangeKey === "all");
   }
 
+  function updateMetricsTabButtons() {
+    for (const btn of metricsTabsEl.querySelectorAll(".filter-btn")) {
+      btn.classList.toggle("active", btn.dataset.tab === metricsTab);
+    }
+    metricsOverviewPanelEl.classList.toggle("hidden", metricsTab !== "overview");
+    metricsResolvedPanelEl.classList.toggle("hidden", metricsTab !== "resolved");
+  }
+
+  // Groups "resolved" events by task id, newest-first (completedLog's native
+  // order), so the first event seen for an id is also its most recent label —
+  // this keeps the breakdown showing a task's current name even after a
+  // rename, without a separate lookup pass. Each entry also gets a
+  // completedCount (how many times *you* completed that same task) so the
+  // UI can show what share of occurrences were resolved rather than done by
+  // you, not just a raw count.
+  function getResolvedBreakdown(range) {
+    const byId = new Map();
+    for (const e of completedLog) {
+      if (e.type !== "resolved") continue;
+      if (range && (e.at < range.start || e.at > range.end)) continue;
+      if (!byId.has(e.id)) byId.set(e.id, { id: e.id, label: e.label, resolvedCount: 0, events: [] });
+      const entry = byId.get(e.id);
+      entry.resolvedCount += 1;
+      entry.events.push(e);
+    }
+
+    for (const entry of byId.values()) {
+      // Tag lookup only works while the task still exists — a resolved
+      // one-time task is deleted (like Complete), so it never has a tag here.
+      const liveTask = tasks.find((t) => t.id === entry.id);
+      entry.tag = liveTask ? liveTask.tag : undefined;
+
+      // All-time, the live task's aggregate counter is the most complete
+      // record (some completions may predate the event log). Everywhere
+      // else — a date range, or a since-deleted task — fall back to counting
+      // "complete" events straight from the log, which is all that's left.
+      entry.completedCount = liveTask && !range
+        ? liveTask.totalCompletions
+        : completedLog.filter(
+            (e) =>
+              e.id === entry.id &&
+              (e.type || "complete") === "complete" &&
+              (!range || (e.at >= range.start && e.at <= range.end))
+          ).length;
+      entry.rate = Math.round((entry.resolvedCount / (entry.resolvedCount + entry.completedCount)) * 100);
+    }
+
+    return Array.from(byId.values()).sort((a, b) => b.resolvedCount - a.resolvedCount);
+  }
+
+  function renderResolvedBreakdown(range) {
+    const breakdown = getResolvedBreakdown(range);
+
+    resolvedHealthEmptyEl.textContent = range
+      ? "No tasks resolved without you in this range."
+      : "No tasks resolved without you yet.";
+    resolvedHealthEmptyEl.classList.toggle("hidden", breakdown.length > 0);
+
+    resolvedHealthListEl.innerHTML = "";
+    if (breakdown.length === 0) return;
+
+    for (const entry of breakdown) {
+      // Inverted from the on-time-rate coloring: here green means the task
+      // is mostly still handled by you, so a high resolved-without-you rate
+      // reads as red instead of green.
+      const row = buildHealthRow(
+        entry.label,
+        `${entry.rate}% resolved without you (${entry.resolvedCount}/${entry.resolvedCount + entry.completedCount})`,
+        entry.rate,
+        colorForRate(100 - entry.rate),
+        false,
+        entry.tag
+      );
+      row.classList.add("health-row-clickable");
+      row.addEventListener("click", () => openResolvedReasonsModal(entry));
+      resolvedHealthListEl.appendChild(row);
+    }
+  }
+
+  function openResolvedReasonsModal(entry) {
+    resolvedReasonsTitleEl.textContent = `Resolved Without You: ${entry.label}`;
+
+    resolvedReasonsListEl.innerHTML = "";
+    const sorted = [...entry.events].sort((a, b) => b.at - a.at);
+    for (const e of sorted) {
+      const li = document.createElement("li");
+      li.className = "history-entry";
+
+      const main = document.createElement("div");
+      main.className = "history-entry-main";
+
+      const label = document.createElement("div");
+      label.className = "history-entry-label";
+      label.textContent = e.reason;
+
+      const meta = document.createElement("div");
+      meta.className = "history-entry-meta";
+      meta.textContent = `Resolved ${formatDateTime(e.at)}`;
+
+      main.appendChild(label);
+      main.appendChild(meta);
+      li.appendChild(main);
+      resolvedReasonsListEl.appendChild(li);
+    }
+
+    resolvedReasonsModal.classList.remove("hidden");
+  }
+
+  function closeResolvedReasonsModal() {
+    resolvedReasonsModal.classList.add("hidden");
+  }
+
   function renderMetrics() {
     updateMetricsRangeButtons();
+    updateMetricsTabButtons();
     const range = getMetricsRangeBounds();
     const recurringTasks = tasks.filter((t) => !t.isOneTime);
 
@@ -942,6 +1079,7 @@
     }
 
     renderOneTimeHealth(oneTimeTotal, oneTimeOnTime, oneTimeDelta, Boolean(range));
+    renderResolvedBreakdown(range);
   }
 
   function openMetricsModal() {
@@ -1699,6 +1837,18 @@
     renderMetrics();
   });
 
+  metricsTabsEl.addEventListener("click", (e) => {
+    const btn = e.target.closest(".filter-btn[data-tab]");
+    if (!btn) return;
+    metricsTab = btn.dataset.tab;
+    updateMetricsTabButtons();
+  });
+
+  resolvedReasonsCloseBtn.addEventListener("click", closeResolvedReasonsModal);
+  resolvedReasonsModal.addEventListener("click", (e) => {
+    if (e.target === resolvedReasonsModal) closeResolvedReasonsModal();
+  });
+
   settingsBtn.addEventListener("click", openSettingsModal);
   settingsCloseBtn.addEventListener("click", closeSettingsModal);
   settingsModal.addEventListener("click", (e) => {
@@ -1791,6 +1941,7 @@
       closeResolveConfirm();
       closeHistoryModal();
       closeMetricsModal();
+      closeResolvedReasonsModal();
       closeSettingsModal();
       closeCalendarPromptModal();
       if (!syncConflictModal.classList.contains("hidden")) cancelSyncConflict();
