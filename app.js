@@ -60,6 +60,12 @@
   const taskHealthEmptyEl = document.getElementById("taskHealthEmpty");
   const oneTimeHealthEl = document.getElementById("oneTimeHealth");
   const oneTimeHealthEmptyEl = document.getElementById("oneTimeHealthEmpty");
+  const metricsRangeFilterEl = document.getElementById("metricsRangeFilter");
+  const metricsCustomRangeEl = document.getElementById("metricsCustomRange");
+  const metricsRangeFromInput = document.getElementById("metricsRangeFrom");
+  const metricsRangeToInput = document.getElementById("metricsRangeTo");
+  const metricsRangeApplyBtn = document.getElementById("metricsRangeApplyBtn");
+  const metricsRangeNoteEl = document.getElementById("metricsRangeNote");
 
   const settingsBtn = document.getElementById("settingsBtn");
   const settingsModal = document.getElementById("settingsModal");
@@ -106,6 +112,12 @@
   let syncConfigured = false;
   let cloudUser = null;
   let pendingRemoteConflict = null;
+
+  // "all" | "1m" | "3m" | "6m" | "custom" — persists across modal open/close
+  // within a session, resetting only on page load.
+  let metricsRangeKey = "all";
+  let metricsCustomFrom = null; // ms, start of the "from" day, when metricsRangeKey === "custom"
+  let metricsCustomTo = null; // ms, end of the "to" day, when metricsRangeKey === "custom"
 
   function loadTasks() {
     try {
@@ -654,7 +666,10 @@
     historyModal.classList.add("hidden");
   }
 
-  function renderOneTimeHealth(total, onTimeCount, deltaSum) {
+  function renderOneTimeHealth(total, onTimeCount, deltaSum, hasRange) {
+    oneTimeHealthEmptyEl.textContent = hasRange
+      ? "No one-time tasks completed in this range."
+      : "No one-time tasks completed yet.";
     oneTimeHealthEmptyEl.classList.toggle("hidden", total > 0);
     oneTimeHealthEl.innerHTML = "";
     if (total === 0) return;
@@ -672,18 +687,75 @@
     );
   }
 
+  // Returns {start, end} in ms for the active preset/custom selection, or
+  // null for "all time" (and for "custom" until both dates are applied).
+  function getMetricsRangeBounds() {
+    if (metricsRangeKey === "all") return null;
+    if (metricsRangeKey === "custom") {
+      if (metricsCustomFrom === null || metricsCustomTo === null) return null;
+      return { start: metricsCustomFrom, end: metricsCustomTo };
+    }
+    const months = metricsRangeKey === "1m" ? 1 : metricsRangeKey === "3m" ? 3 : 6;
+    const start = new Date();
+    start.setMonth(start.getMonth() - months);
+    return { start: start.getTime(), end: Date.now() };
+  }
+
+  function updateMetricsRangeButtons() {
+    for (const btn of metricsRangeFilterEl.querySelectorAll(".filter-btn")) {
+      btn.classList.toggle("active", btn.dataset.range === metricsRangeKey);
+    }
+    metricsCustomRangeEl.classList.toggle("hidden", metricsRangeKey !== "custom");
+    metricsRangeNoteEl.classList.toggle("hidden", metricsRangeKey === "all");
+  }
+
   function renderMetrics() {
+    updateMetricsRangeButtons();
+    const range = getMetricsRangeBounds();
     const recurringTasks = tasks.filter((t) => !t.isOneTime);
-    const sumCompletions = recurringTasks.reduce((s, t) => s + t.totalCompletions, 0);
-    const sumOnTime = recurringTasks.reduce((s, t) => s + t.onTimeCompletions, 0);
-    const sumDelta = recurringTasks.reduce((s, t) => s + (t.totalDeltaMs || 0), 0);
+
+    let sumCompletions, sumOnTime, sumDelta, perTaskStats;
+
+    if (!range) {
+      // All time: the fast aggregate counters, exactly as before date
+      // filtering existed.
+      sumCompletions = recurringTasks.reduce((s, t) => s + t.totalCompletions, 0);
+      sumOnTime = recurringTasks.reduce((s, t) => s + t.onTimeCompletions, 0);
+      sumDelta = recurringTasks.reduce((s, t) => s + (t.totalDeltaMs || 0), 0);
+      perTaskStats = recurringTasks.map((t) => ({
+        task: t,
+        total: t.totalCompletions,
+        onTime: t.onTimeCompletions,
+        delta: t.totalDeltaMs || 0,
+      }));
+    } else {
+      // Date-filtered: only the event log carries timestamps, so this can
+      // only reflect completions logged since that feature shipped.
+      const recurringEvents = completedLog.filter(
+        (e) => (e.type || "complete") === "complete" && e.isOneTime === false && e.at >= range.start && e.at <= range.end
+      );
+      const byTaskId = new Map(recurringTasks.map((t) => [t.id, { task: t, total: 0, onTime: 0, delta: 0 }]));
+      for (const e of recurringEvents) {
+        const entry = byTaskId.get(e.id);
+        if (!entry) continue; // event belongs to a task that's since been deleted
+        entry.total += 1;
+        if (e.onTime) entry.onTime += 1;
+        entry.delta += e.deltaMs;
+      }
+      perTaskStats = Array.from(byTaskId.values());
+      sumCompletions = recurringEvents.length;
+      sumOnTime = recurringEvents.filter((e) => e.onTime).length;
+      sumDelta = recurringEvents.reduce((s, e) => s + e.deltaMs, 0);
+    }
 
     // Must filter to one-time completions here: completedLog now also holds
-    // recurring completions (already counted above via task counters) and
-    // reschedule events (no onTime/dueAt/completedAt) — without this filter,
-    // recurring completions would be double-counted and reschedules would
-    // corrupt the math with NaN.
-    const oneTimeEvents = completedLog.filter(isOneTimeCompleteEvent);
+    // recurring completions (already counted above) and reschedule events
+    // (no onTime/dueAt/completedAt) — without this filter, recurring
+    // completions would be double-counted and reschedules would corrupt the
+    // math with NaN.
+    const oneTimeEvents = completedLog.filter(
+      (e) => isOneTimeCompleteEvent(e) && (!range || (e.at >= range.start && e.at <= range.end))
+    );
     const oneTimeTotal = oneTimeEvents.length;
     const oneTimeOnTime = oneTimeEvents.filter((e) => e.onTime).length;
     const oneTimeDelta = oneTimeEvents.reduce((s, e) => s + (e.completedAt - e.dueAt), 0);
@@ -722,16 +794,16 @@
     }
 
     taskHealthListEl.innerHTML = "";
-    taskHealthEmptyEl.classList.toggle("hidden", recurringTasks.length > 0);
+    taskHealthEmptyEl.classList.toggle("hidden", perTaskStats.length > 0);
 
-    const withData = recurringTasks
-      .filter((t) => t.totalCompletions > 0)
-      .map((t) => ({ task: t, rate: Math.round((t.onTimeCompletions / t.totalCompletions) * 100) }))
+    const withData = perTaskStats
+      .filter((s) => s.total > 0)
+      .map((s) => ({ task: s.task, rate: Math.round((s.onTime / s.total) * 100), total: s.total, delta: s.delta }))
       .sort((a, b) => b.rate - a.rate);
-    const noData = recurringTasks.filter((t) => t.totalCompletions === 0);
+    const noData = perTaskStats.filter((s) => s.total === 0);
 
-    for (const { task, rate } of withData) {
-      const deltaText = avgDeltaLabel(task.totalDeltaMs || 0, task.totalCompletions);
+    for (const { task, rate, total, delta } of withData) {
+      const deltaText = avgDeltaLabel(delta, total);
       taskHealthListEl.appendChild(
         buildHealthRow(
           task.label,
@@ -742,13 +814,13 @@
         )
       );
     }
-    for (const task of noData) {
+    for (const { task } of noData) {
       taskHealthListEl.appendChild(
-        buildHealthRow(task.label, "No completions yet", 0, "var(--border)", true)
+        buildHealthRow(task.label, range ? "No completions in this range" : "No completions yet", 0, "var(--border)", true)
       );
     }
 
-    renderOneTimeHealth(oneTimeTotal, oneTimeOnTime, oneTimeDelta);
+    renderOneTimeHealth(oneTimeTotal, oneTimeOnTime, oneTimeDelta, Boolean(range));
   }
 
   function openMetricsModal() {
@@ -936,6 +1008,11 @@
 
   function pad2(n) {
     return String(n).padStart(2, "0");
+  }
+
+  function toDateInputValue(ms) {
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
   }
 
   function toIcsUtc(ms) {
@@ -1338,6 +1415,29 @@
   metricsCloseBtn.addEventListener("click", closeMetricsModal);
   metricsModal.addEventListener("click", (e) => {
     if (e.target === metricsModal) closeMetricsModal();
+  });
+
+  metricsRangeFilterEl.addEventListener("click", (e) => {
+    const btn = e.target.closest(".filter-btn");
+    if (!btn) return;
+    metricsRangeKey = btn.dataset.range;
+    if (metricsRangeKey === "custom") {
+      if (metricsCustomFrom !== null) metricsRangeFromInput.value = toDateInputValue(metricsCustomFrom);
+      if (metricsCustomTo !== null) metricsRangeToInput.value = toDateInputValue(metricsCustomTo);
+    }
+    renderMetrics();
+  });
+  metricsRangeApplyBtn.addEventListener("click", () => {
+    const fromVal = metricsRangeFromInput.value;
+    const toVal = metricsRangeToInput.value;
+    if (!fromVal || !toVal) return;
+    const start = new Date(`${fromVal}T00:00:00`).getTime();
+    const end = new Date(`${toVal}T23:59:59.999`).getTime();
+    if (Number.isNaN(start) || Number.isNaN(end) || start > end) return;
+    metricsCustomFrom = start;
+    metricsCustomTo = end;
+    metricsRangeKey = "custom";
+    renderMetrics();
   });
 
   settingsBtn.addEventListener("click", openSettingsModal);

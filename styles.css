@@ -589,6 +589,36 @@ body {
   font-weight: 700;
 }
 
+.metrics-custom-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: -8px 0 16px;
+}
+
+.metrics-custom-range input[type="date"] {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.metrics-custom-range span {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.metrics-range-note {
+  margin: -8px 0 16px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
 .metrics-overview {
   display: flex;
   align-items: center;

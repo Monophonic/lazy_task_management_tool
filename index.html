@@ -72,6 +72,25 @@
   <div class="modal modal-wide">
     <h2>Task Health Metrics</h2>
 
+    <div id="metricsRangeFilter" class="filter-bar">
+      <button type="button" class="badge filter-btn active" data-range="all">All time</button>
+      <button type="button" class="badge filter-btn" data-range="1m">1 month</button>
+      <button type="button" class="badge filter-btn" data-range="3m">3 months</button>
+      <button type="button" class="badge filter-btn" data-range="6m">6 months</button>
+      <button type="button" class="badge filter-btn" data-range="custom">Custom…</button>
+    </div>
+
+    <div id="metricsCustomRange" class="metrics-custom-range hidden">
+      <input type="date" id="metricsRangeFrom" />
+      <span>to</span>
+      <input type="date" id="metricsRangeTo" />
+      <button type="button" id="metricsRangeApplyBtn" class="btn btn-secondary">Apply</button>
+    </div>
+
+    <p id="metricsRangeNote" class="metrics-range-note hidden">
+      Only includes completions logged since date-tracking was added — older history isn't retroactively available.
+    </p>
+
     <div class="metrics-overview">
       <div class="donut-wrap" id="overallDonutWrap"></div>
       <div class="metrics-overview-stats" id="overviewStats"></div>
