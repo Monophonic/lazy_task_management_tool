@@ -524,6 +524,17 @@ body {
   margin: 0;
 }
 
+.usage-row {
+  margin-bottom: 10px;
+}
+
+.usage-warning {
+  font-size: 0.82rem;
+  color: var(--due-soon);
+  margin: 8px 0 0;
+  line-height: 1.4;
+}
+
 .google-g {
   display: inline-flex;
   align-items: center;

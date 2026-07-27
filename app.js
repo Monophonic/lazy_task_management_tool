@@ -4,12 +4,14 @@
   const STORAGE_KEY = "task-manager:tasks";
   const HISTORY_STORAGE_KEY = "task-manager:completedLog";
   const SYNCED_UID_KEY = "task-manager:syncedUid";
-  const MAX_HISTORY_ENTRIES = 50;
+  const MAX_HISTORY_DISPLAY_ENTRIES = 100; // display-only cap for the History modal; storage itself is unlimited
   const DAY_MS = 24 * 60 * 60 * 1000;
   const WEEK_MS = 7 * DAY_MS;
   const MONTH_MS = 30 * DAY_MS; // approximate — a fixed 30-day month, not calendar-exact
   const LENIENCY_MS = 6 * 60 * 60 * 1000; // +/- 6 hours
   const DUE_SOON_WINDOW_MS = DAY_MS; // flagged "due soon" within 24h of the deadline
+  const FIRESTORE_DOC_LIMIT_BYTES = 1_048_576; // Firestore's real per-document size limit
+  const LOCAL_STORAGE_WARN_BYTES = 5_000_000; // conservative, clearly-labeled-as-an-estimate threshold
 
   const taskListEl = document.getElementById("taskList");
   const emptyStateEl = document.getElementById("emptyState");
@@ -62,6 +64,9 @@
   const settingsBtn = document.getElementById("settingsBtn");
   const settingsModal = document.getElementById("settingsModal");
   const settingsCloseBtn = document.getElementById("settingsCloseBtn");
+  const localUsageRowEl = document.getElementById("localUsageRow");
+  const cloudUsageRowEl = document.getElementById("cloudUsageRow");
+  const usageWarningEl = document.getElementById("usageWarning");
   const exportBtn = document.getElementById("exportBtn");
   const importBtn = document.getElementById("importBtn");
   const importFileInput = document.getElementById("importFileInput");
@@ -136,6 +141,44 @@
     if (cloudUser && window.TaskSync) {
       window.TaskSync.push({ tasks, completedLog });
     }
+  }
+
+  // A completedLog entry is either a completion ("complete") or a manual
+  // reschedule ("reschedule"). Legacy entries (saved before this distinction
+  // existed) predate both fields and were always one-time-task completions —
+  // so treating a missing `type`/`isOneTime` as "complete"/true is not a guess,
+  // it's the only value that was ever possible for those entries.
+  function isOneTimeCompleteEvent(e) {
+    const type = e.type || "complete";
+    const isOneTime = e.isOneTime === undefined ? true : e.isOneTime;
+    return type === "complete" && isOneTime;
+  }
+
+  // Unique key for de-duplicating completedLog entries across devices during
+  // sync merges. New entries carry `eventId`; legacy entries don't, so fall
+  // back to a composite key built from fields that were always present.
+  function completedLogEntryKey(e) {
+    return e.eventId || `${e.id}|${e.completedAt ?? e.at}|${e.type || "complete"}`;
+  }
+
+  // Union-merges two completedLog arrays by entry key, keeping every event
+  // from both sides (never silently dropping one device's history), sorted
+  // newest-first. Used instead of a wholesale array replace anywhere sync
+  // applies remote completedLog data, since every completion now writes here
+  // (not just rare one-time-task completions) — a wholesale replace would
+  // risk losing one device's events on a close-together multi-device write.
+  function mergeCompletedLogs(local, remote) {
+    const byKey = new Map();
+    for (const e of remote) byKey.set(completedLogEntryKey(e), e);
+    for (const e of local) byKey.set(completedLogEntryKey(e), e);
+    return Array.from(byKey.values()).sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
+  }
+
+  // Mirrors exactly what gets pushed to Firestore ({tasks, completedLog}), so
+  // this is a good proxy for both the local-storage footprint and the cloud
+  // sync document size.
+  function estimateDataSizeBytes() {
+    return new Blob([JSON.stringify({ tasks, completedLog })]).size;
   }
 
   function makeId() {
@@ -506,13 +549,17 @@
       const onTime = now - task.dueAt <= LENIENCY_MS;
 
       completedLog.unshift({
+        eventId: makeId(),
         id: task.id,
         label: task.label,
+        type: "complete",
+        isOneTime: true,
+        at: now,
         dueAt: task.dueAt,
         completedAt: now,
         onTime,
+        deltaMs: now - task.dueAt,
       });
-      completedLog = completedLog.slice(0, MAX_HISTORY_ENTRIES);
       saveCompletedLog();
 
       tasks = tasks.filter((t) => t.id !== id);
@@ -532,13 +579,31 @@
     task.lastCompletedAt = now;
     task.lastCompletedDisplayAt = now;
 
+    // Granular, timestamped record of this completion — kept alongside (not
+    // instead of) the aggregate counters above, so future work can filter/
+    // compare metrics across arbitrary time windows.
+    completedLog.unshift({
+      eventId: makeId(),
+      id: task.id,
+      label: task.label,
+      type: "complete",
+      isOneTime: false,
+      at: now,
+      dueAt: previousDue,
+      completedAt: now,
+      onTime,
+      deltaMs: delta,
+    });
+    saveCompletedLog();
+
     saveTasks();
     render();
   }
 
   function renderHistory() {
-    const total = completedLog.length;
-    const onTimeCount = completedLog.filter((e) => e.onTime).length;
+    const oneTimeEvents = completedLog.filter(isOneTimeCompleteEvent);
+    const total = oneTimeEvents.length;
+    const onTimeCount = oneTimeEvents.filter((e) => e.onTime).length;
     const rate = total > 0 ? Math.round((onTimeCount / total) * 100) : null;
 
     historyStatsEl.classList.toggle("hidden", total === 0);
@@ -552,7 +617,7 @@
     historyLogEl.innerHTML = "";
     historyEmptyEl.classList.toggle("hidden", total > 0);
 
-    for (const entry of completedLog) {
+    for (const entry of oneTimeEvents.slice(0, MAX_HISTORY_DISPLAY_ENTRIES)) {
       const li = document.createElement("li");
       li.className = "history-entry";
 
@@ -613,9 +678,15 @@
     const sumOnTime = recurringTasks.reduce((s, t) => s + t.onTimeCompletions, 0);
     const sumDelta = recurringTasks.reduce((s, t) => s + (t.totalDeltaMs || 0), 0);
 
-    const oneTimeTotal = completedLog.length;
-    const oneTimeOnTime = completedLog.filter((e) => e.onTime).length;
-    const oneTimeDelta = completedLog.reduce((s, e) => s + (e.completedAt - e.dueAt), 0);
+    // Must filter to one-time completions here: completedLog now also holds
+    // recurring completions (already counted above via task counters) and
+    // reschedule events (no onTime/dueAt/completedAt) — without this filter,
+    // recurring completions would be double-counted and reschedules would
+    // corrupt the math with NaN.
+    const oneTimeEvents = completedLog.filter(isOneTimeCompleteEvent);
+    const oneTimeTotal = oneTimeEvents.length;
+    const oneTimeOnTime = oneTimeEvents.filter((e) => e.onTime).length;
+    const oneTimeDelta = oneTimeEvents.reduce((s, e) => s + (e.completedAt - e.dueAt), 0);
 
     const totalAll = sumCompletions + oneTimeTotal;
     const onTimeAll = sumOnTime + oneTimeOnTime;
@@ -696,8 +767,44 @@
     importConfirmEl.classList.add("hidden");
   }
 
+  function formatBytes(n) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
+  function renderStorageUsage() {
+    const bytes = estimateDataSizeBytes();
+
+    localUsageRowEl.innerHTML = "";
+    const localPct = Math.min(100, Math.round((bytes / LOCAL_STORAGE_WARN_BYTES) * 100));
+    localUsageRowEl.appendChild(
+      buildHealthRow("Local data size", formatBytes(bytes), localPct, colorForRate(100 - localPct), false)
+    );
+
+    const showCloud = syncConfigured;
+    cloudUsageRowEl.classList.toggle("hidden", !showCloud);
+    usageWarningEl.classList.add("hidden");
+
+    if (showCloud) {
+      cloudUsageRowEl.innerHTML = "";
+      const cloudPct = Math.min(100, Math.round((bytes / FIRESTORE_DOC_LIMIT_BYTES) * 100));
+      cloudUsageRowEl.appendChild(
+        buildHealthRow("Cloud sync size", `${formatBytes(bytes)} of ~1 MB`, cloudPct, colorForRate(100 - cloudPct), false)
+      );
+
+      if (cloudPct >= 70) {
+        usageWarningEl.textContent =
+          "Approaching the cloud sync size limit. Consider exporting a backup — " +
+          "there's no in-app way to trim history yet.";
+        usageWarningEl.classList.remove("hidden");
+      }
+    }
+  }
+
   function openSettingsModal() {
     resetImportUi();
+    renderStorageUsage();
     settingsModal.classList.remove("hidden");
   }
 
@@ -746,7 +853,10 @@
     if (!window.TaskSync) return;
     window.TaskSync.onRemoteChange((remoteData) => {
       tasks = Array.isArray(remoteData.tasks) ? remoteData.tasks : [];
-      completedLog = Array.isArray(remoteData.completedLog) ? remoteData.completedLog : [];
+      // completedLog is merged, not replaced: every completion now writes
+      // here (not just rare one-time-task completions), so a wholesale
+      // overwrite risks losing another device's just-made event.
+      completedLog = mergeCompletedLogs(completedLog, Array.isArray(remoteData.completedLog) ? remoteData.completedLog : []);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
       localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(completedLog));
       setSyncStatus("Synced");
@@ -759,9 +869,9 @@
     const remoteTaskCount = Array.isArray(remoteData.tasks) ? remoteData.tasks.length : 0;
     const remoteLogCount = Array.isArray(remoteData.completedLog) ? remoteData.completedLog.length : 0;
     syncConflictTextEl.textContent =
-      `Your Google account already has cloud data: ${remoteTaskCount} task(s) and ${remoteLogCount} history ` +
-      `entr${remoteLogCount === 1 ? "y" : "ies"}. This device has ${tasks.length} task(s) and ` +
-      `${completedLog.length} history entr${completedLog.length === 1 ? "y" : "ies"}. Which do you want to keep?`;
+      `Your Google account already has cloud data: ${remoteTaskCount} task(s) and ${remoteLogCount} ` +
+      `event${remoteLogCount === 1 ? "" : "s"}. This device has ${tasks.length} task(s) and ` +
+      `${completedLog.length} event${completedLog.length === 1 ? "" : "s"}. Which do you want to keep?`;
     syncConflictModal.classList.remove("hidden");
   }
 
@@ -982,9 +1092,9 @@
       importErrorEl.classList.add("hidden");
       pendingImportData = result;
       importConfirmTextEl.textContent =
-        `This will replace your current ${tasks.length} task(s) and ${completedLog.length} history ` +
-        `entr${completedLog.length === 1 ? "y" : "ies"} with ${result.tasks.length} task(s) and ` +
-        `${result.completedLog.length} history entr${result.completedLog.length === 1 ? "y" : "ies"} ` +
+        `This will replace your current ${tasks.length} task(s) and ${completedLog.length} ` +
+        `event${completedLog.length === 1 ? "" : "s"} with ${result.tasks.length} task(s) and ` +
+        `${result.completedLog.length} event${result.completedLog.length === 1 ? "" : "s"} ` +
         `from this file. This cannot be undone.`;
       importConfirmEl.classList.remove("hidden");
     };
@@ -1098,6 +1208,16 @@
     if (id) {
       const task = tasks.find((t) => t.id === id);
       if (task) {
+        // Captured before any field below is mutated — nextDueAt() reads
+        // isOneTime/lastCompletedAt/cadenceCount/cadenceEvery/cadenceUnit, all
+        // of which are about to change, so this must happen first. Round-trip
+        // through the same datetime-local formatting the reschedule field
+        // uses (minute precision, no seconds/ms) so an untouched field
+        // compares as unchanged rather than falsely differing on precision.
+        const originalDueAt = task.isOneTime
+          ? null
+          : fromDatetimeLocalValue(toDatetimeLocalValue(nextDueAt(task)));
+
         task.label = label;
         task.description = description;
         task.isOneTime = isOneTime;
@@ -1115,6 +1235,23 @@
           if (rescheduleToggleInput.checked) {
             const newDueAt = fromDatetimeLocalValue(rescheduleDateInput.value);
             task.lastCompletedAt = newDueAt - intervalMs(task.cadenceCount, task.cadenceEvery, task.cadenceUnit);
+
+            // Skip logging when the date field was left unchanged (it's
+            // pre-filled with the current due date) — a same-to-same
+            // reschedule isn't a real event, just noise in the log.
+            if (newDueAt !== originalDueAt) {
+              completedLog.unshift({
+                eventId: makeId(),
+                id: task.id,
+                label: task.label,
+                type: "reschedule",
+                isOneTime: false,
+                at: Date.now(),
+                fromDueAt: originalDueAt,
+                toDueAt: newDueAt,
+              });
+              saveCompletedLog();
+            }
           }
         }
       }
@@ -1228,17 +1365,27 @@
     if (e.target === syncConflictModal) cancelSyncConflict();
   });
   syncUseLocalBtn.addEventListener("click", async () => {
+    // "Use This Device" picks this device's tasks, but the completion/
+    // reschedule history is still merged (not discarded) — an event log
+    // shouldn't lose entries just because the *task list* conflicted.
+    if (pendingRemoteConflict) {
+      completedLog = mergeCompletedLogs(completedLog, pendingRemoteConflict.completedLog || []);
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(completedLog));
+    }
     closeSyncConflictModal();
     setSyncStatus("Syncing…");
     await window.TaskSync.pushNow({ tasks, completedLog });
     if (cloudUser) localStorage.setItem(SYNCED_UID_KEY, cloudUser.uid);
     setSyncStatus("Synced");
+    render();
     startRemoteListener();
   });
   syncUseCloudBtn.addEventListener("click", () => {
     if (!pendingRemoteConflict) return;
     tasks = pendingRemoteConflict.tasks || [];
-    completedLog = pendingRemoteConflict.completedLog || [];
+    // Same reasoning as above: tasks take the cloud's version outright, but
+    // completedLog is merged so this device's own events aren't discarded.
+    completedLog = mergeCompletedLogs(completedLog, pendingRemoteConflict.completedLog || []);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
     localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(completedLog));
     if (cloudUser) localStorage.setItem(SYNCED_UID_KEY, cloudUser.uid);

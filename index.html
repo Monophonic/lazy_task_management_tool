@@ -121,6 +121,16 @@
     </div>
 
     <div class="settings-section">
+      <h3 class="settings-section-title">Storage Usage</h3>
+      <p class="settings-section-desc">
+        How much task and history data you have, so cloud sync failures don't come as a surprise.
+      </p>
+      <div id="localUsageRow" class="usage-row"></div>
+      <div id="cloudUsageRow" class="usage-row hidden"></div>
+      <p id="usageWarning" class="usage-warning hidden"></p>
+    </div>
+
+    <div class="settings-section">
       <h3 class="settings-section-title">Export Data</h3>
       <p class="settings-section-desc">Save all your tasks and completion history to a JSON file.</p>
       <button type="button" id="exportBtn" class="btn btn-secondary">Export as JSON</button>
