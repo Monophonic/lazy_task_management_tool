@@ -126,6 +126,7 @@
   const calendarPromptModal = document.getElementById("calendarPromptModal");
   const calendarPromptTextEl = document.getElementById("calendarPromptText");
   const calendarPromptSkipBtn = document.getElementById("calendarPromptSkipBtn");
+  const calendarPromptGoogleBtn = document.getElementById("calendarPromptGoogleBtn");
   const calendarPromptDownloadBtn = document.getElementById("calendarPromptDownloadBtn");
 
   let tasks = loadTasks();
@@ -1433,11 +1434,50 @@
     URL.revokeObjectURL(url);
   }
 
+  // Google's documented "quick add" URL scheme — no OAuth or API key needed,
+  // it just opens Google Calendar's own event-creation page pre-filled; the
+  // user still has to click Save there themselves.
+  function buildGoogleCalendarUrl(task) {
+    const dueAt = nextDueAt(task);
+    const eventDurationMs = 30 * 60 * 1000;
+
+    const params = new URLSearchParams({
+      action: "TEMPLATE",
+      text: task.label,
+      dates: `${toIcsUtc(dueAt)}/${toIcsUtc(dueAt + eventDurationMs)}`,
+    });
+    if (task.description) params.set("details", task.description);
+
+    if (!task.isOneTime) {
+      // Same fixed-interval approximation buildIcsForTask uses, but Google's
+      // own recurrence picker only recognizes whole-day/whole-week
+      // intervals as a normal rule — anything else it still saves, just
+      // labeled "Unsupported recurrence". Days/weeks are fixed-length units
+      // (unlike months), so collapsing an even multiple of them into
+      // FREQ=DAILY/WEEKLY changes nothing about which instants recur.
+      const hours = Math.max(
+        1,
+        Math.round(intervalMs(task.cadenceCount, task.cadenceEvery || 1, task.cadenceUnit) / (60 * 60 * 1000))
+      );
+      let recur;
+      if (hours % 168 === 0) {
+        recur = `RRULE:FREQ=WEEKLY;INTERVAL=${hours / 168}`;
+      } else if (hours % 24 === 0) {
+        recur = `RRULE:FREQ=DAILY;INTERVAL=${hours / 24}`;
+      } else {
+        recur = `RRULE:FREQ=HOURLY;INTERVAL=${hours}`;
+      }
+      params.set("recur", recur);
+    }
+
+    return `https://calendar.google.com/calendar/render?${params.toString()}`;
+  }
+
   function openCalendarPromptModal(task) {
     pendingCalendarTask = task;
     calendarPromptTextEl.textContent =
-      `Want to add "${task.label}" to your calendar? Download an .ics file to import into ` +
-      `Google Calendar, Apple Calendar, Outlook, and more.`;
+      `Want to add "${task.label}" to your calendar? Add it straight to Google Calendar, ` +
+      `or download an .ics file to import into Apple Calendar, Outlook, and more.`;
     calendarPromptModal.classList.remove("hidden");
   }
 
@@ -1926,6 +1966,12 @@
   });
 
   calendarPromptSkipBtn.addEventListener("click", closeCalendarPromptModal);
+  calendarPromptGoogleBtn.addEventListener("click", () => {
+    if (pendingCalendarTask) {
+      window.open(buildGoogleCalendarUrl(pendingCalendarTask), "_blank", "noopener,noreferrer");
+    }
+    closeCalendarPromptModal();
+  });
   calendarPromptDownloadBtn.addEventListener("click", () => {
     if (pendingCalendarTask) downloadIcsForTask(pendingCalendarTask);
     closeCalendarPromptModal();
