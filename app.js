@@ -5,6 +5,7 @@
   const HISTORY_STORAGE_KEY = "task-manager:completedLog";
   const TAGS_STORAGE_KEY = "task-manager:tags";
   const SYNCED_UID_KEY = "task-manager:syncedUid";
+  const LAST_LOCAL_CHANGE_KEY = "task-manager:lastLocalChangeAt";
   const MAX_HISTORY_DISPLAY_ENTRIES = 100; // display-only cap for the History modal; storage itself is unlimited
   const DAY_MS = 24 * 60 * 60 * 1000;
   const WEEK_MS = 7 * DAY_MS;
@@ -200,6 +201,11 @@
   }
 
   function schedulePush() {
+    // Stamped unconditionally (not just while signed in) so it's already
+    // there the moment a device does sign in, and survives a reload even if
+    // the debounced Firestore push below never got the chance to fire —
+    // see the freshness check in startRemoteListener().
+    localStorage.setItem(LAST_LOCAL_CHANGE_KEY, String(Date.now()));
     if (cloudUser && window.TaskSync) {
       window.TaskSync.push({ tasks, completedLog, tags });
     }
@@ -1253,6 +1259,25 @@
   function startRemoteListener() {
     if (!window.TaskSync) return;
     window.TaskSync.onRemoteChange((remoteData) => {
+      // Guards against a specific race: saveTasks()/saveCompletedLog()/
+      // saveTags() write to localStorage immediately but debounce the
+      // Firestore push (sync.js), so a change made just before a reload can
+      // still be sitting unpushed when this listener attaches. Its first
+      // snapshot would then be Firestore's stale, pre-change document —
+      // applying it here would silently erase that newer local change. If
+      // this device's last local edit is newer than what Firestore has
+      // confirmed, push now instead of overwriting; the confirmed snapshot
+      // that follows will be safe to apply.
+      const remoteUpdatedAtMs =
+        remoteData.updatedAt && typeof remoteData.updatedAt.toMillis === "function"
+          ? remoteData.updatedAt.toMillis()
+          : 0;
+      const lastLocalChangeAtMs = Number(localStorage.getItem(LAST_LOCAL_CHANGE_KEY)) || 0;
+      if (lastLocalChangeAtMs > remoteUpdatedAtMs) {
+        window.TaskSync.pushNow({ tasks, completedLog, tags });
+        return;
+      }
+
       tasks = Array.isArray(remoteData.tasks) ? remoteData.tasks : [];
       // completedLog is merged, not replaced: every completion now writes
       // here (not just rare one-time-task completions), so a wholesale
