@@ -71,7 +71,7 @@ itself (both set up below), not from hiding these values.
    data.
 5. In **Project settings → General → Your apps**, add a Web app and copy the
    `firebaseConfig` object it gives you.
-6. Paste those values into `firebase-config.js` in this repo, replacing the
+6. Paste those values into `js/firebase-config.js` in this repo, replacing the
    placeholders.
 7. In **Authentication → Settings → Authorized domains**, add the domain
    you're deploying to (e.g. `yourname.github.io`) — `localhost` is already
