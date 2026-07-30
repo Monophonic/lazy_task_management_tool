@@ -15,6 +15,16 @@
   const FIRESTORE_DOC_LIMIT_BYTES = 1_048_576; // Firestore's real per-document size limit
   const LOCAL_STORAGE_WARN_BYTES = 5_000_000; // conservative, clearly-labeled-as-an-estimate threshold
 
+  // Fixed 4-hour buckets spanning the day, used by the "By Time of Day" metrics view.
+  const TIME_OF_DAY_BUCKETS = [
+    { startHour: 0, label: "12am – 4am" },
+    { startHour: 4, label: "4am – 8am" },
+    { startHour: 8, label: "8am – 12pm" },
+    { startHour: 12, label: "12pm – 4pm" },
+    { startHour: 16, label: "4pm – 8pm" },
+    { startHour: 20, label: "8pm – 12am" },
+  ];
+
   const taskListEl = document.getElementById("taskList");
   const emptyStateEl = document.getElementById("emptyState");
   const weekCalendarEl = document.getElementById("weekCalendar");
@@ -86,6 +96,16 @@
   const resolvedReasonsTitleEl = document.getElementById("resolvedReasonsTitle");
   const resolvedReasonsListEl = document.getElementById("resolvedReasonsList");
   const resolvedReasonsCloseBtn = document.getElementById("resolvedReasonsCloseBtn");
+
+  const metricsTimeOfDayPanelEl = document.getElementById("metricsTimeOfDayPanel");
+  const timeOfDayTableBodyEl = document.getElementById("timeOfDayTableBody");
+  const timeOfDayEmptyEl = document.getElementById("timeOfDayEmpty");
+
+  const timeOfDayTaskModal = document.getElementById("timeOfDayTaskModal");
+  const timeOfDayTaskTitleEl = document.getElementById("timeOfDayTaskTitle");
+  const timeOfDayTaskTableBodyEl = document.getElementById("timeOfDayTaskTableBody");
+  const timeOfDayTaskEmptyEl = document.getElementById("timeOfDayTaskEmpty");
+  const timeOfDayTaskCloseBtn = document.getElementById("timeOfDayTaskCloseBtn");
 
   const settingsBtn = document.getElementById("settingsBtn");
   const settingsModal = document.getElementById("settingsModal");
@@ -867,6 +887,7 @@
     }
     metricsOverviewPanelEl.classList.toggle("hidden", metricsTab !== "overview");
     metricsResolvedPanelEl.classList.toggle("hidden", metricsTab !== "resolved");
+    metricsTimeOfDayPanelEl.classList.toggle("hidden", metricsTab !== "timeofday");
   }
 
   // Groups "resolved" events by task id, newest-first (completedLog's native
@@ -973,6 +994,91 @@
     resolvedReasonsModal.classList.add("hidden");
   }
 
+  // Counts real completions (recurring + one-time, never resolves/reschedules)
+  // by which 4-hour bucket of the day they landed in, optionally narrowed to
+  // one task's own completions and/or the active metrics date range.
+  function getTimeOfDayBreakdown(range, taskId) {
+    const counts = TIME_OF_DAY_BUCKETS.map(() => 0);
+    let total = 0;
+
+    for (const e of completedLog) {
+      if ((e.type || "complete") !== "complete") continue;
+      if (taskId && e.id !== taskId) continue;
+
+      const at = e.at ?? e.completedAt;
+      if (at === undefined) continue;
+      if (range && (at < range.start || at > range.end)) continue;
+
+      const completedAt = e.completedAt ?? e.at;
+      const hour = new Date(completedAt).getHours();
+      const bucketIndex = Math.floor(hour / 4);
+      counts[bucketIndex] += 1;
+      total += 1;
+    }
+
+    return { counts, total };
+  }
+
+  function buildTimeOfDayRows(tbodyEl, counts, total) {
+    tbodyEl.innerHTML = "";
+    const maxCount = Math.max(...counts, 1);
+
+    TIME_OF_DAY_BUCKETS.forEach((bucket, i) => {
+      const count = counts[i];
+      const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+      const barPct = Math.round((count / maxCount) * 100);
+
+      const tr = document.createElement("tr");
+
+      const labelTd = document.createElement("td");
+      labelTd.textContent = bucket.label;
+
+      const countTd = document.createElement("td");
+      countTd.textContent = total > 0 ? `${count} (${pct}%)` : String(count);
+
+      const barTd = document.createElement("td");
+      const track = document.createElement("div");
+      track.className = "time-bar-track";
+      const fill = document.createElement("div");
+      fill.className = "time-bar-fill";
+      fill.style.width = `${barPct}%`;
+      track.appendChild(fill);
+      barTd.appendChild(track);
+
+      tr.appendChild(labelTd);
+      tr.appendChild(countTd);
+      tr.appendChild(barTd);
+      tbodyEl.appendChild(tr);
+    });
+  }
+
+  function renderTimeOfDayBreakdown(range) {
+    const { counts, total } = getTimeOfDayBreakdown(range, null);
+    timeOfDayEmptyEl.textContent = range ? "No completions in this range." : "No completions yet.";
+    timeOfDayEmptyEl.classList.toggle("hidden", total > 0);
+    metricsTimeOfDayPanelEl.querySelector(".time-of-day-table").classList.toggle("hidden", total === 0);
+    buildTimeOfDayRows(timeOfDayTableBodyEl, counts, total);
+  }
+
+  function openTimeOfDayTaskModal(task) {
+    const range = getMetricsRangeBounds();
+    const { counts, total } = getTimeOfDayBreakdown(range, task.id);
+
+    timeOfDayTaskTitleEl.textContent = `Completion Times: ${task.label}`;
+    timeOfDayTaskEmptyEl.textContent = range
+      ? "No completions for this task in this range."
+      : "No completions for this task yet.";
+    timeOfDayTaskEmptyEl.classList.toggle("hidden", total > 0);
+    timeOfDayTaskModal.querySelector(".time-of-day-table").classList.toggle("hidden", total === 0);
+    buildTimeOfDayRows(timeOfDayTaskTableBodyEl, counts, total);
+
+    timeOfDayTaskModal.classList.remove("hidden");
+  }
+
+  function closeTimeOfDayTaskModal() {
+    timeOfDayTaskModal.classList.add("hidden");
+  }
+
   function renderMetrics() {
     updateMetricsRangeButtons();
     updateMetricsTabButtons();
@@ -1069,24 +1175,27 @@
 
     for (const { task, rate, total, delta } of withData) {
       const deltaText = avgDeltaLabel(delta, total);
-      taskHealthListEl.appendChild(
-        buildHealthRow(
-          task.label,
-          `${rate}% on time${deltaText ? ` · ${deltaText}` : ""}`,
-          rate,
-          colorForRate(rate),
-          false
-        )
+      const row = buildHealthRow(
+        task.label,
+        `${rate}% on time${deltaText ? ` · ${deltaText}` : ""}`,
+        rate,
+        colorForRate(rate),
+        false
       );
+      row.classList.add("health-row-clickable");
+      row.addEventListener("click", () => openTimeOfDayTaskModal(task));
+      taskHealthListEl.appendChild(row);
     }
     for (const { task } of noData) {
-      taskHealthListEl.appendChild(
-        buildHealthRow(task.label, range ? "No completions in this range" : "No completions yet", 0, "var(--border)", true)
-      );
+      const row = buildHealthRow(task.label, range ? "No completions in this range" : "No completions yet", 0, "var(--border)", true);
+      row.classList.add("health-row-clickable");
+      row.addEventListener("click", () => openTimeOfDayTaskModal(task));
+      taskHealthListEl.appendChild(row);
     }
 
     renderOneTimeHealth(oneTimeTotal, oneTimeOnTime, oneTimeDelta, Boolean(range));
     renderResolvedBreakdown(range);
+    renderTimeOfDayBreakdown(range);
   }
 
   function openMetricsModal() {
@@ -1914,6 +2023,11 @@
     if (e.target === resolvedReasonsModal) closeResolvedReasonsModal();
   });
 
+  timeOfDayTaskCloseBtn.addEventListener("click", closeTimeOfDayTaskModal);
+  timeOfDayTaskModal.addEventListener("click", (e) => {
+    if (e.target === timeOfDayTaskModal) closeTimeOfDayTaskModal();
+  });
+
   settingsBtn.addEventListener("click", openSettingsModal);
   settingsCloseBtn.addEventListener("click", closeSettingsModal);
   settingsModal.addEventListener("click", (e) => {
@@ -2013,6 +2127,7 @@
       closeHistoryModal();
       closeMetricsModal();
       closeResolvedReasonsModal();
+      closeTimeOfDayTaskModal();
       closeSettingsModal();
       closeCalendarPromptModal();
       if (!syncConflictModal.classList.contains("hidden")) cancelSyncConflict();

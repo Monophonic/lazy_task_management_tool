@@ -840,6 +840,48 @@ body {
   font-weight: 500;
 }
 
+.time-of-day-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.time-of-day-table th {
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0 0 8px;
+}
+
+.time-of-day-table th:last-child,
+.time-of-day-table td:last-child {
+  width: 40%;
+}
+
+.time-of-day-table td {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.time-of-day-table td:first-child {
+  font-weight: 600;
+}
+
+.time-bar-track {
+  height: 8px;
+  border-radius: 100px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.time-bar-fill {
+  height: 100%;
+  border-radius: 100px;
+  background: var(--accent);
+}
+
 .calendar-panel {
   background: var(--surface);
   border: 1px solid var(--border);

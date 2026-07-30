@@ -95,6 +95,7 @@
     <div id="metricsTabs" class="filter-bar">
       <button type="button" class="badge filter-btn active" data-tab="overview">Overview</button>
       <button type="button" class="badge filter-btn" data-tab="resolved">Resolved</button>
+      <button type="button" class="badge filter-btn" data-tab="timeofday">By Time of Day</button>
     </div>
 
     <div id="metricsOverviewPanel">
@@ -118,6 +119,21 @@
       <p id="resolvedHealthEmpty" class="history-empty hidden">No tasks resolved without you yet.</p>
     </div>
 
+    <div id="metricsTimeOfDayPanel" class="hidden">
+      <h3 class="metrics-section-title">Completions by Time of Day</h3>
+      <table class="time-of-day-table">
+        <thead>
+          <tr>
+            <th>Time of day</th>
+            <th>Completions</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="timeOfDayTableBody"></tbody>
+      </table>
+      <p id="timeOfDayEmpty" class="history-empty hidden">No completions yet.</p>
+    </div>
+
     <div class="modal-actions">
       <button type="button" id="metricsCloseBtn" class="btn btn-secondary">Close</button>
     </div>
@@ -131,6 +147,27 @@
     <ul id="resolvedReasonsList" class="history-log"></ul>
     <div class="modal-actions">
       <button type="button" id="resolvedReasonsCloseBtn" class="btn btn-secondary">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Time of Day (per-task) Modal -->
+<div id="timeOfDayTaskModal" class="modal-overlay hidden">
+  <div class="modal">
+    <h2 id="timeOfDayTaskTitle">Completion Times</h2>
+    <table class="time-of-day-table">
+      <thead>
+        <tr>
+          <th>Time of day</th>
+          <th>Completions</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="timeOfDayTaskTableBody"></tbody>
+    </table>
+    <p id="timeOfDayTaskEmpty" class="history-empty hidden">No completions yet.</p>
+    <div class="modal-actions">
+      <button type="button" id="timeOfDayTaskCloseBtn" class="btn btn-secondary">Close</button>
     </div>
   </div>
 </div>
